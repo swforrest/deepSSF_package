@@ -1,0 +1,13 @@
+# Lets GitHub show a "Cite this repository" button and gives users a clean
+# citation. Fill in DOI/authors to match your MEE paper.
+cff-version: 1.2.0
+title: deepssf
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Scott
+    family-names: Forrest
+repository-code: "https://github.com/swforrest/deepssf"
+url: "https://swforrest.github.io/deepSSF/"
+license: MIT
+version: 0.1.0

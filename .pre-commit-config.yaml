@@ -1,0 +1,9 @@
+# Install once with:  pre-commit install
+# Then ruff lints + formats your staged files on every `git commit`.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.0
+    hooks:
+      - id: ruff          # lint
+        args: [--fix]
+      - id: ruff-format   # format
