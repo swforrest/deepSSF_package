@@ -438,6 +438,92 @@ class MovementDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# Raw telemetry → step format
+# ---------------------------------------------------------------------------
+
+def prepare_movement_df(
+    df: pd.DataFrame,
+    id_col: str = "id",
+    time_col: str = "time",
+    x_col: str = "x",
+    y_col: str = "y",
+) -> pd.DataFrame:
+    """Convert a raw telemetry DataFrame to the step format expected by
+    :class:`MovementDataset`.
+
+    The raw format is one row per GPS fix with columns ``id``, ``time``
+    (ISO-8601), ``x``, ``y``.  This function computes:
+
+    * ``x1_, y1_`` – departure location (current fix).
+    * ``x2_, y2_`` – arrival location (next fix).
+    * ``t1_`` – ISO-8601 timestamp of the departure (passed to
+      :class:`MovementDataset` for S2 month look-up).
+    * ``bearing`` – step bearing in radians (arctan2 of dy/dx in projected
+      CRS).  Shifted inside :class:`MovementDataset` to give the *previous*
+      step's bearing.
+    * ``dt_hour`` – time elapsed between consecutive fixes (hours).
+    * ``hour_t1_sin1``, ``hour_t1_cos1`` – cyclic encoding of the hour of
+      ``t1_``.
+    * ``yday_t1_sin1``, ``yday_t1_cos1`` – cyclic encoding of the day-of-year
+      of ``t1_``.
+
+    The last GPS fix for each individual is dropped (no arrival location).
+    Individuals are processed independently and the results are concatenated.
+
+    Parameters
+    ----------
+    df:
+        Raw telemetry DataFrame.
+    id_col, time_col, x_col, y_col:
+        Column names (defaults: ``'id'``, ``'time'``, ``'x'``, ``'y'``).
+
+    Returns
+    -------
+    pd.DataFrame
+        Ready to pass directly to :class:`MovementDataset`.
+    """
+    frames = []
+
+    for _, group in df.groupby(id_col, sort=False):
+        g = group.sort_values(time_col).reset_index(drop=True)
+        n = len(g)
+        if n < 2:
+            continue
+
+        dep = g.iloc[:-1]       # departure rows (all but last)
+        arr = g.iloc[1:]        # arrival rows  (all but first)
+
+        times_dep = pd.to_datetime(dep[time_col].values, utc=True)
+        times_arr = pd.to_datetime(arr[time_col].values, utc=True)
+
+        dx = arr[x_col].values - dep[x_col].values
+        dy = arr[y_col].values - dep[y_col].values
+
+        hours = times_dep.hour + times_dep.minute / 60.0
+        ydays = times_dep.day_of_year.astype(float)
+
+        out = pd.DataFrame(
+            {
+                "id":            dep[id_col].values,
+                "t1_":           dep[time_col].values,
+                "x1_":           dep[x_col].values,
+                "y1_":           dep[y_col].values,
+                "x2_":           arr[x_col].values,
+                "y2_":           arr[y_col].values,
+                "bearing":       np.arctan2(dy, dx),
+                "dt_hour":       (times_arr - times_dep).total_seconds() / 3600.0,
+                "hour_t1_sin1":  np.sin(2 * np.pi * hours / 24),
+                "hour_t1_cos1":  np.cos(2 * np.pi * hours / 24),
+                "yday_t1_sin1":  np.sin(2 * np.pi * ydays / 365.25),
+                "yday_t1_cos1":  np.cos(2 * np.pi * ydays / 365.25),
+            }
+        )
+        frames.append(out)
+
+    return pd.concat(frames, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
 # Convenience: CSV → split DataLoaders
 # ---------------------------------------------------------------------------
 
@@ -451,6 +537,7 @@ def make_dataloaders(
     num_workers: int = 0,
     scalar_cols: list[str] | None = None,
     bearing_col: str = "bearing",
+    prepare: bool = False,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Read a movement CSV and return train / val / test DataLoaders.
 
@@ -487,12 +574,18 @@ def make_dataloaders(
         Forwarded to :class:`MovementDataset`.
     bearing_col:
         Forwarded to :class:`MovementDataset`.
+    prepare:
+        If ``True``, call :func:`prepare_movement_df` on the raw CSV before
+        building the dataset.  Use this when the CSV has ``(id, time, x, y)``
+        columns and the step-format columns have not yet been computed.
 
     Returns
     -------
     dataloader_train, dataloader_val, dataloader_test : DataLoader
     """
     df = pd.read_csv(csv_path)
+    if prepare:
+        df = prepare_movement_df(df)
     dataset = MovementDataset(
         df,
         layer_paths,

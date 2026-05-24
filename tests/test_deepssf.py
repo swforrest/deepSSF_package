@@ -3,9 +3,19 @@
 Run with:  pytest
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
+
+# Path to the bundled test dataset
+_DATA_DIR = Path(__file__).parent.parent / "src" / "deepssf" / "datasets" / "data"
+_CSV_PATH  = _DATA_DIR / "buffalo_djelk_id2005.csv"
+_LAYER_PATHS = {
+    "ndvi":  str(_DATA_DIR / "ndvi_2005.tif"),
+    "slope": str(_DATA_DIR / "slope_2005.tif"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -521,3 +531,106 @@ def test_day_to_s2_month_wraps_to_1_12():
     for yday in (1, 90, 180, 300, 365, 400, 730):
         m = _day_to_s2_month(yday)
         assert 1 <= m <= 12, f"yday={yday} → month={m} out of range"
+
+
+# ---------------------------------------------------------------------------
+# deepssf.data — integration tests against the bundled test dataset
+# ---------------------------------------------------------------------------
+
+def test_prepare_movement_df_columns():
+    """prepare_movement_df produces the required step-format columns."""
+    import pandas as pd
+    from deepssf.data import prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+
+    required = {"x1_", "y1_", "x2_", "y2_", "t1_", "bearing", "dt_hour",
+                "hour_t1_sin1", "hour_t1_cos1", "yday_t1_sin1", "yday_t1_cos1"}
+    assert required.issubset(df.columns)
+
+
+def test_prepare_movement_df_row_count():
+    """One row is dropped per individual (last fix has no next location)."""
+    import pandas as pd
+    from deepssf.data import prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+
+    # One row dropped per unique id
+    n_ids = raw["id"].nunique()
+    assert len(df) == len(raw) - n_ids
+
+
+def test_prepare_movement_df_bearing_finite():
+    """Bearing values must all be finite (no NaN from missing coords)."""
+    import pandas as pd
+    from deepssf.data import prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+    assert df["bearing"].notna().all()
+    assert np.isfinite(df["bearing"].values).all()
+
+
+def test_prepare_movement_df_cyclic_range():
+    """Cyclic encodings must stay in [-1, 1]."""
+    import pandas as pd
+    from deepssf.data import prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+    for col in ("hour_t1_sin1", "hour_t1_cos1", "yday_t1_sin1", "yday_t1_cos1"):
+        assert df[col].between(-1.0, 1.0).all(), f"{col} out of [-1, 1]"
+
+
+@pytest.mark.skipif(not _CSV_PATH.exists(), reason="test dataset not found")
+def test_movement_dataset_getitem_shapes():
+    """MovementDataset __getitem__ returns correctly shaped tensors."""
+    import pandas as pd
+    from deepssf.data import MovementDataset, prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+    window = 25  # small window for speed
+
+    # Use only 20 rows so __init__ is fast in tests
+    dataset = MovementDataset(
+        df.iloc[:20].reset_index(drop=True),
+        _LAYER_PATHS,
+        window_size=window,
+        scalar_cols=["hour_t1_sin1", "hour_t1_cos1",
+                     "yday_t1_sin1", "yday_t1_cos1", "dt_hour"],
+    )
+
+    spatial, scalars, bearing, (px2, py2), transform = dataset[0]
+
+    assert spatial.ndim == 3                    # [C, H, W]
+    assert spatial.shape[-1] == window
+    assert spatial.shape[-2] == window
+    assert scalars.shape == (5,)
+    assert bearing.shape == (1,)
+
+
+@pytest.mark.skipif(not _CSV_PATH.exists(), reason="test dataset not found")
+def test_make_dataloaders_prepare_flag():
+    """make_dataloaders(prepare=True) works end-to-end on raw CSV."""
+    from deepssf.data import make_dataloaders
+
+    dl_train, dl_val, dl_test = make_dataloaders(
+        str(_CSV_PATH),
+        _LAYER_PATHS,
+        window_size=25,
+        batch_size=4,
+        train_split=0.7,
+        val_split=0.15,
+        prepare=True,
+        scalar_cols=["hour_t1_sin1", "hour_t1_cos1",
+                     "yday_t1_sin1", "yday_t1_cos1", "dt_hour"],
+    )
+    assert len(dl_train) > 0
+    spatial, scalars, bearing, labels, _ = next(iter(dl_train))
+    px2, py2 = labels
+    assert spatial.ndim == 4       # [B, C, H, W]
+    assert px2.shape[0] == spatial.shape[0]  # batch sizes match

@@ -14,6 +14,7 @@ from deepssf.data import (
     load_environmental_layers,
     load_s2_data,
     make_dataloaders,
+    prepare_movement_df,
 )
 from deepssf.model import ConvJointModel, ModelParams
 from deepssf.simulate import make_simulation_inputs, simulate_next_step, simulate_trajectory
@@ -46,6 +47,7 @@ __all__ = [
     "load_environmental_layers",
     "load_s2_data",
     "make_dataloaders",
+    "prepare_movement_df",
     # simulate
     "make_simulation_inputs",
     "simulate_next_step",
