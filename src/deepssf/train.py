@@ -19,7 +19,6 @@ from torch import nn
 
 from deepssf.utils import get_device
 
-
 # ---------------------------------------------------------------------------
 # Loss
 # ---------------------------------------------------------------------------
@@ -32,50 +31,74 @@ class negativeLogLikeLoss(nn.Module):
 
     1. Sums the two log-density channels to obtain a combined log-density.
     2. Re-normalises with the log-sum-exp trick.
-    3. Evaluates the log-density at the observed next-step pixel (target).
-    4. Returns the mean/sum/pointwise negative log-likelihood.
+    3. Indexes the log-density at the observed next-step pixel coordinates.
+    4. Returns ``(total_loss, habitat_loss, movement_loss)``.
 
     Parameters
     ----------
     reduction:
-        ``'mean'`` (default), ``'sum'``, or ``'none'``.
+        ``'mean'`` (default), ``'median'``, ``'sum'``, or ``'none'``.
+    freeze_movement:
+        If ``True``, only the habitat surface is used for the combined loss
+        (movement parameters are effectively frozen during that pass).
     """
 
-    def __init__(self, reduction: str = "mean") -> None:
+    def __init__(self, reduction: str = "mean", freeze_movement: bool = False) -> None:
         super().__init__()
-        if reduction not in ("mean", "sum", "none"):
-            raise ValueError("reduction must be 'mean', 'sum', or 'none'")
+        if reduction not in ("mean", "median", "sum", "none"):
+            raise ValueError("reduction must be 'mean', 'median', 'sum', or 'none'")
         self.reduction = reduction
+        self.freeze_movement = freeze_movement
 
-    def forward(self, predict: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        predict: torch.Tensor,
+        target: tuple[torch.Tensor, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
         predict:
             Shape [B, H, W, 2] — log-densities from the joint model.
         target:
-            Shape [B, H, W] — 1 at the observed next-step pixel, 0 elsewhere.
+            ``(px2, py2)`` — 1-D integer tensors of length B giving the
+            column (x) and row (y) pixel index of the next observed step
+            within the local crop.
 
         Returns
         -------
-        Scalar (mean/sum) or [B, H, W] tensor (none).
+        ``(total_loss, habitat_loss, movement_loss)`` — each scalar
+        (mean/median/sum) or 1-D [B] tensor (none).
         """
-        pred = predict[:, :, :, 0] + predict[:, :, :, 1]
+        hab_surface  = predict[:, :, :, 0]
+        move_surface = predict[:, :, :, 1]
 
-        if torch.isnan(pred).any():
-            raise ValueError("NaN detected in model predictions")
+        if torch.isnan(hab_surface).any():
+            print("NaNs detected in habitat_probability_surface")
+        if torch.isnan(move_surface).any():
+            print("NaNs detected in movement_probability_surface")
 
-        pred = pred - torch.logsumexp(pred, dim=(1, 2), keepdim=True)
-        nll  = -1 * (pred * target)
+        pred_prod = hab_surface if self.freeze_movement else hab_surface + move_surface
 
-        if torch.isnan(nll).any():
-            raise ValueError("NaN detected in NLL computation")
+        if torch.isnan(pred_prod).any():
+            print("NaNs detected in pred_prod")
+
+        pred_prod = pred_prod - torch.logsumexp(pred_prod, dim=(1, 2), keepdim=True)
+
+        px2, py2 = target
+        batch_idx = torch.arange(len(px2), device=predict.device)
+
+        nll      = -pred_prod[batch_idx, py2, px2]
+        hab_loss = -hab_surface[batch_idx, py2, px2]
+        mov_loss = -move_surface[batch_idx, py2, px2]
 
         if self.reduction == "mean":
-            return torch.mean(nll)
+            return torch.mean(nll), torch.mean(hab_loss), torch.mean(mov_loss)
+        if self.reduction == "median":
+            return torch.median(nll), torch.median(hab_loss), torch.median(mov_loss)
         if self.reduction == "sum":
-            return torch.sum(nll)
-        return nll
+            return torch.sum(nll), torch.sum(hab_loss), torch.sum(mov_loss)
+        return nll, hab_loss, mov_loss
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +149,9 @@ class EarlyStopping:
             self._save(val_loss, model)
         elif score < self.best_score + self.delta:
             self.counter += 1
-            self.trace_func(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+            self.trace_func(
+                f"EarlyStopping counter: {self.counter} out of {self.patience}"
+            )
             if self.counter >= self.patience:
                 self.early_stop = True
         else:
@@ -137,7 +162,8 @@ class EarlyStopping:
     def _save(self, val_loss: float, model: nn.Module) -> None:
         if self.verbose:
             self.trace_func(
-                f"Validation loss decreased ({self.val_loss_min:.6f} → {val_loss:.6f}). Saving model…"
+                f"Validation loss decreased "
+                f"({self.val_loss_min:.6f} → {val_loss:.6f}). Saving model…"
             )
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
@@ -194,6 +220,7 @@ def train_loop(
         x1 = x1.to(device)
         x2 = x2.to(device)
         x3 = x3.to(device)
+        y  = tuple(t.to(device) for t in y)
 
         with torch.set_grad_enabled(not skip_epoch0_training):
             outputs = model((x1, x2, x3))
@@ -213,7 +240,8 @@ def train_loop(
             # updates only movement parameters.
             habitat_grads = []
             for param in model.conv_habitat.parameters():
-                habitat_grads.append(param.grad.clone() if param.grad is not None else None)
+                g = param.grad.clone() if param.grad is not None else None
+                habitat_grads.append(g)
                 param.grad = None
 
             if optimiser_movement is not None:
@@ -269,6 +297,7 @@ def test_loop(dataloader_test, model: nn.Module, loss_fn) -> torch.Tensor:
             x1 = x1.to(device)
             x2 = x2.to(device)
             x3 = x3.to(device)
+            y  = tuple(t.to(device) for t in y)
             total_loss, _, _ = loss_fn(model((x1, x2, x3)), y)
             test_loss += total_loss.detach()
 

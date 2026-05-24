@@ -117,9 +117,9 @@ def simulate_next_step(
     x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0)
 
     # Mask cells outside the raster extent (padded with -1 in first channel)
-    ndvi_local = x1[0, 0, :, :]
+    first_channel = x1[0, 0, :, :]
     mask = torch.where(
-        ndvi_local == -1, torch.tensor(float("nan")), torch.ones_like(ndvi_local)
+        first_channel == -1, torch.tensor(float("nan")), torch.ones_like(first_channel)
     )
 
     out = model((x1, scalars_to_grid, bearing))
@@ -171,6 +171,7 @@ def simulate_trajectory(
     starting_hour: float = 0.0,
     window_size: int = 101,
     base_year: int = 2018,
+    month_index_fn: Callable[[float], int] | None = None,
 ) -> pd.DataFrame:
     """Simulate a trajectory by rolling the model forward.
 
@@ -181,7 +182,7 @@ def simulate_trajectory(
     get_landscape:
         Callable ``(month_index: int) -> list[Tensor]``.  The caller is
         responsible for returning the correct set of raster tensors for the
-        given 0-based month index (same indexing as ``_day_to_month_index``).
+        given month index.
     transform:
         Rasterio ``Affine`` transform shared by all landscape rasters.
     start_x, start_y:
@@ -195,7 +196,14 @@ def simulate_trajectory(
     window_size:
         Side length of the spatial crop in pixels.
     base_year:
-        Base year for 0-based month index (default 2018, matching the notebook).
+        Base year for the default 0-based month index (default 2018).
+        Ignored when *month_index_fn* is provided.
+    month_index_fn:
+        Optional callable ``(yday: float) -> int`` converting day-of-year to
+        the month index passed to *get_landscape*.  Defaults to
+        ``_day_to_month_index(yday, base_year)`` (0-based).  Pass the same
+        function used in ``validate_next_step_probs`` to share a single
+        *get_landscape* callable across both.
 
     Returns
     -------
@@ -207,19 +215,23 @@ def simulate_trajectory(
         n_steps, starting_yday, starting_hour
     )
 
+    _month_fn = month_index_fn if month_index_fn is not None else (
+        lambda yday: _day_to_month_index(yday, base_year)
+    )
+
     rows: list[dict] = []
     x_loc, y_loc = start_x, start_y
     bearing = torch.zeros(1, 1)
 
     previous_yday: float | None = None
-    month_index = _day_to_month_index(starting_yday, base_year)
+    month_index = _month_fn(starting_yday)
     landscape_rasters = get_landscape(month_index)
 
     with torch.no_grad():
         for i in range(n_steps):
             yday = float(yday_t2[i])
             if yday != previous_yday:
-                month_index = _day_to_month_index(yday, base_year)
+                month_index = _month_fn(yday)
                 landscape_rasters = get_landscape(month_index)
                 previous_yday = yday
 

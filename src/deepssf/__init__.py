@@ -9,9 +9,15 @@ expose the things you want people to rely on. Internal helpers stay private.
 # time (see pyproject.toml [tool.hatch.version]). Bump it when you release.
 __version__ = "0.1.0"
 
-from deepssf.data import MovementDataset, load_environmental_layers, load_s2_data
+from deepssf.data import (
+    MovementDataset,
+    load_environmental_layers,
+    load_s2_data,
+    make_dataloaders,
+)
 from deepssf.model import ConvJointModel, ModelParams
 from deepssf.simulate import make_simulation_inputs, simulate_next_step, simulate_trajectory
+from deepssf.validate import validate_next_step_probs
 from deepssf.train import EarlyStopping, negativeLogLikeLoss, test_loop, train_loop
 from deepssf.utils import (
     clear_memory,
@@ -39,10 +45,13 @@ __all__ = [
     "MovementDataset",
     "load_environmental_layers",
     "load_s2_data",
+    "make_dataloaders",
     # simulate
     "make_simulation_inputs",
     "simulate_next_step",
     "simulate_trajectory",
+    # validate
+    "validate_next_step_probs",
     # utils
     "get_device",
     "clear_memory",

@@ -236,26 +236,52 @@ def test_negative_log_like_loss_mean():
     loss_fn = negativeLogLikeLoss(reduction="mean")
     B, H, W = 2, 5, 5
     predict = torch.zeros(B, H, W, 2)
-    target  = torch.zeros(B, H, W)
-    target[:, 2, 2] = 1.0  # observed pixel
-    loss = loss_fn(predict, target)
-    assert loss.shape == ()      # scalar
-    assert torch.isfinite(loss)
+    px2 = torch.tensor([2, 2])  # observed col for each batch item
+    py2 = torch.tensor([2, 2])  # observed row for each batch item
+    total, hab, mov = loss_fn(predict, (px2, py2))
+    assert total.shape == ()      # scalar
+    assert torch.isfinite(total)
+    assert torch.isfinite(hab)
+    assert torch.isfinite(mov)
 
 
 def test_negative_log_like_loss_reductions():
     from deepssf.train import negativeLogLikeLoss
     B, H, W = 2, 5, 5
     predict = torch.zeros(B, H, W, 2)
-    target  = torch.zeros(B, H, W)
-    target[:, 1, 1] = 1.0
+    px2 = torch.tensor([1, 1])
+    py2 = torch.tensor([1, 1])
+    target = (px2, py2)
 
-    mean_val = negativeLogLikeLoss("mean")(predict, target)
-    sum_val  = negativeLogLikeLoss("sum")(predict, target)
-    none_val = negativeLogLikeLoss("none")(predict, target)
+    mean_total, _, _ = negativeLogLikeLoss("mean")(predict, target)
+    sum_total, _, _  = negativeLogLikeLoss("sum")(predict, target)
+    none_total, _, _ = negativeLogLikeLoss("none")(predict, target)
 
-    assert none_val.shape == (B, H, W)
-    assert abs(sum_val.item() / (B * H * W) - mean_val.item()) < 1e-5
+    assert none_total.shape == (B,)
+    assert abs(sum_total.item() / B - mean_total.item()) < 1e-5
+
+
+def test_negative_log_like_loss_median():
+    from deepssf.train import negativeLogLikeLoss
+    B, H, W = 2, 5, 5
+    predict = torch.zeros(B, H, W, 2)
+    px2 = torch.tensor([2, 2])
+    py2 = torch.tensor([2, 2])
+    med_total, _, _ = negativeLogLikeLoss("median")(predict, (px2, py2))
+    assert med_total.shape == ()
+
+
+def test_negative_log_like_loss_freeze_movement():
+    from deepssf.train import negativeLogLikeLoss
+    B, H, W = 2, 5, 5
+    predict = torch.zeros(B, H, W, 2)
+    px2 = torch.tensor([2, 2])
+    py2 = torch.tensor([2, 2])
+    total_frozen, _, _ = negativeLogLikeLoss("mean", freeze_movement=True)(predict, (px2, py2))
+    total_joint, _, _  = negativeLogLikeLoss("mean", freeze_movement=False)(predict, (px2, py2))
+    # With all-zero logits both should be finite; frozen uses only habitat channel
+    assert torch.isfinite(total_frozen)
+    assert torch.isfinite(total_joint)
 
 
 def test_negative_log_like_loss_invalid_reduction():
@@ -392,3 +418,106 @@ def test_simulate_trajectory_dataframe_shape(small_params):
     assert len(df) == 3
     for col in ("x", "y", "hour", "yday", "month_index"):
         assert col in df.columns
+
+
+# ---------------------------------------------------------------------------
+# deepssf.validate
+# ---------------------------------------------------------------------------
+
+def _make_movement_df(n: int, x_centre: float, y_centre: float) -> "pd.DataFrame":
+    """Synthetic movement DataFrame with required columns."""
+    import pandas as pd
+    rng = np.random.default_rng(0)
+    xs = x_centre + rng.uniform(-50, 50, n)
+    ys = y_centre + rng.uniform(-50, 50, n)
+    df = pd.DataFrame(
+        {
+            "x1_": xs,
+            "y1_": ys,
+            "x2_": np.roll(xs, -1),  # next step = shifted current
+            "y2_": np.roll(ys, -1),
+            "hour_t2_sin": np.sin(2 * np.pi * np.arange(n) / 24),
+            "hour_t2_cos": np.cos(2 * np.pi * np.arange(n) / 24),
+            "yday_t2_sin": np.sin(2 * np.pi * np.arange(n) / 365.25),
+            "yday_t2_cos": np.cos(2 * np.pi * np.arange(n) / 365.25),
+            "yday_t2": (np.arange(n) % 365) + 1,
+            "bearing_tm1": np.zeros(n),
+        }
+    )
+    return df
+
+
+def test_validate_next_step_probs_returns_columns(small_params):
+    """validate_next_step_probs appends three probability columns."""
+    import math
+    import rasterio.transform
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.validate import validate_next_step_probs
+
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+    model = ConvJointModel(params)
+
+    W = 11
+    landscape_size = W * 20
+    transform = rasterio.transform.from_bounds(
+        0, 0, landscape_size * 25, landscape_size * 25, landscape_size, landscape_size
+    )
+    rasters = [torch.ones(landscape_size, landscape_size) for _ in range(2)]
+    centre = landscape_size * 25 / 2
+
+    df = _make_movement_df(5, x_centre=centre, y_centre=centre)
+    result = validate_next_step_probs(
+        model,
+        df,
+        get_landscape=lambda _m: rasters,
+        transform=transform,
+        window_size=W,
+    )
+    assert len(result) == len(df)
+    for col in ("habitat_prob", "move_prob", "next_step_prob"):
+        assert col in result.columns
+
+
+def test_validate_next_step_probs_row0_is_zero(small_params):
+    """Row 0 must always be 0.0 (no previous bearing)."""
+    import math
+    import rasterio.transform
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.validate import validate_next_step_probs
+
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+    model = ConvJointModel(params)
+
+    W = 11
+    landscape_size = W * 20
+    transform = rasterio.transform.from_bounds(
+        0, 0, landscape_size * 25, landscape_size * 25, landscape_size, landscape_size
+    )
+    rasters = [torch.ones(landscape_size, landscape_size) for _ in range(2)]
+    centre = landscape_size * 25 / 2
+
+    df = _make_movement_df(4, x_centre=centre, y_centre=centre)
+    result = validate_next_step_probs(
+        model, df, get_landscape=lambda _m: rasters,
+        transform=transform, window_size=W,
+    )
+    assert result["habitat_prob"].iloc[0] == 0.0
+    assert result["next_step_prob"].iloc[0] == 0.0
+
+
+def test_day_to_s2_month_wraps_to_1_12():
+    """_day_to_s2_month always returns values in 1–12, even for multi-year yday."""
+    from deepssf.validate import _day_to_s2_month
+    for yday in (1, 90, 180, 300, 365, 400, 730):
+        m = _day_to_s2_month(yday)
+        assert 1 <= m <= 12, f"yday={yday} → month={m} out of range"

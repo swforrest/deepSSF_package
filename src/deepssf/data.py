@@ -17,20 +17,19 @@ Typical usage::
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import glob
 import os
 import re
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import rasterio
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 from deepssf.utils import subset_layer_vectorized
-
 
 # ---------------------------------------------------------------------------
 # Filename / date helpers
@@ -300,14 +299,23 @@ def _select_s2_month(s2_dict: dict, requested: str) -> np.ndarray:
     return next(iter(s2_dict.values()))
 
 
+_DEFAULT_SCALAR_COLS = [
+    "hour_t1_sin1",
+    "hour_t1_cos1",
+    "yday_t1_sin1",
+    "yday_t1_cos1",
+    "dt_hour",
+]
+
+
 class MovementDataset(Dataset):
     """Dataset of GPS movement steps with matched spatial patches.
 
     Each item is a 5-tuple:
 
     * ``spatial_data``    – [C, H, W] float tensor centred on (x1, y1).
-    * ``scalar_to_grid``  – [S] float tensor (hour sin/cos, yday sin/cos,
-      dt_hour) for broadcasting into spatial maps.
+    * ``scalar_to_grid``  – [S] float tensor (scalar covariates) for
+      broadcasting into spatial maps.
     * ``bearing_tm1``     – [1] float tensor of the previous step's bearing.
     * ``next_step_pixel`` – ``(col, row)`` of the next fix within the patch.
     * ``raster_transform`` – affine transform (passed through for downstream
@@ -317,12 +325,18 @@ class MovementDataset(Dataset):
     ----------
     movement_df:
         DataFrame with columns: ``x1_``, ``y1_``, ``x2_``, ``y2_``,
-        ``t1_``, ``bearing``, ``hour_t1_sin1``, ``hour_t1_cos1``,
-        ``yday_t1_sin1``, ``yday_t1_cos1``, ``dt_hour``.
+        ``t1_``, *bearing_col*, and all *scalar_cols*.
     layer_paths:
         Passed directly to :func:`load_environmental_layers`.
     window_size:
         Edge length of the spatial patch in pixels (typically 101).
+    scalar_cols:
+        Column names to use as scalar inputs to the model.  Defaults to
+        ``['hour_t1_sin1', 'hour_t1_cos1', 'yday_t1_sin1', 'yday_t1_cos1',
+        'dt_hour']``.
+    bearing_col:
+        Column name of the step bearing (radians).  Shifted by one row to
+        give the *previous* step's bearing.  Default: ``'bearing'``.
     """
 
     def __init__(
@@ -330,6 +344,8 @@ class MovementDataset(Dataset):
         movement_df: pd.DataFrame,
         layer_paths: dict,
         window_size: int,
+        scalar_cols: list[str] | None = None,
+        bearing_col: str = "bearing",
     ) -> None:
         self.movement_df = movement_df.reset_index(drop=True)
         self.window_size = window_size
@@ -338,17 +354,13 @@ class MovementDataset(Dataset):
             layer_paths
         )
 
-        scalar_cols = [
-            "hour_t1_sin1", "hour_t1_cos1",
-            "yday_t1_sin1", "yday_t1_cos1",
-            "dt_hour",
-        ]
+        cols = scalar_cols if scalar_cols is not None else _DEFAULT_SCALAR_COLS
         self.scalar_to_grid_data = torch.from_numpy(
-            movement_df[scalar_cols].values
+            movement_df[cols].values
         ).float()
 
         bearing_raw: pd.Series = (
-            movement_df["bearing"].astype(float).shift(1).fillna(0)
+            movement_df[bearing_col].astype(float).shift(1).fillna(0)
         )
         self.bearing_tm1 = torch.from_numpy(
             bearing_raw.to_numpy()
@@ -423,3 +435,80 @@ class MovementDataset(Dataset):
             next_step_pixel,
             self.raster_transform,
         )
+
+
+# ---------------------------------------------------------------------------
+# Convenience: CSV → split DataLoaders
+# ---------------------------------------------------------------------------
+
+def make_dataloaders(
+    csv_path: str,
+    layer_paths: dict,
+    window_size: int = 101,
+    batch_size: int = 32,
+    train_split: float = 0.8,
+    val_split: float = 0.1,
+    num_workers: int = 0,
+    scalar_cols: list[str] | None = None,
+    bearing_col: str = "bearing",
+) -> tuple[DataLoader, DataLoader, DataLoader]:
+    """Read a movement CSV and return train / val / test DataLoaders.
+
+    Mirrors the notebook pattern::
+
+        dataset = MovementDataset(df, layer_paths, window_size)
+        train_ds, val_ds, test_ds = random_split(dataset, [0.8, 0.1, 0.1])
+        dl_train = DataLoader(train_ds, batch_size=32, shuffle=True)
+
+    Parameters
+    ----------
+    csv_path:
+        Path to the movement CSV file.
+    layer_paths:
+        Dict passed to :func:`load_environmental_layers`, e.g.::
+
+            {
+                's2_dir': 'path/to/s2/',
+                'slope': 'path/to/slope.tif',
+            }
+
+    window_size:
+        Spatial patch size in pixels.
+    batch_size:
+        Number of samples per batch.
+    train_split:
+        Fraction of data for training (default 0.8).
+    val_split:
+        Fraction of data for validation (default 0.1).  The remaining
+        ``1 - train_split - val_split`` goes to the test set.
+    num_workers:
+        Worker processes for data loading.  Use 0 inside Jupyter notebooks.
+    scalar_cols:
+        Forwarded to :class:`MovementDataset`.
+    bearing_col:
+        Forwarded to :class:`MovementDataset`.
+
+    Returns
+    -------
+    dataloader_train, dataloader_val, dataloader_test : DataLoader
+    """
+    df = pd.read_csv(csv_path)
+    dataset = MovementDataset(
+        df,
+        layer_paths,
+        window_size,
+        scalar_cols=scalar_cols,
+        bearing_col=bearing_col,
+    )
+
+    test_split = 1.0 - train_split - val_split
+    train_ds, val_ds, test_ds = torch.utils.data.random_split(
+        dataset, [train_split, val_split, test_split]
+    )
+
+    dl_kwargs = dict(batch_size=batch_size, num_workers=num_workers)
+    dl_train = DataLoader(train_ds, shuffle=True, **dl_kwargs)
+    dl_val   = DataLoader(val_ds,   shuffle=False, **dl_kwargs)
+    dl_test  = DataLoader(test_ds,  shuffle=False, **dl_kwargs)
+
+    return dl_train, dl_val, dl_test
