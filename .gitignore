@@ -27,3 +27,6 @@ env/
 *.pt
 *.pth
 *.ckpt
+
+# Example notebook outputs (GIFs, snapshots, saved figures)
+examples/outputs/

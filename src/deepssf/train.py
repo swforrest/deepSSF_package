@@ -10,12 +10,18 @@ Key objects
     One-epoch training pass with separate habitat/movement optimisers.
 ``test_loop``
     Evaluation pass (no gradients).
+``make_optimisers``
+    Create dual Adam optimisers and ReduceLROnPlateau schedulers.
+``fit``
+    Full training loop: train, validate, schedule, checkpoint, snapshot.
 """
 
 from __future__ import annotations
 
+import os
+
 import torch
-from torch import nn
+from torch import nn, optim
 
 from deepssf.utils import get_device
 
@@ -305,3 +311,227 @@ def test_loop(dataloader_test, model: nn.Module, loss_fn) -> torch.Tensor:
     torch.cuda.empty_cache()
     print(f"Avg test loss: {test_loss:>15f}\n")
     return test_loss
+
+
+# ---------------------------------------------------------------------------
+# Optimiser factory
+# ---------------------------------------------------------------------------
+
+def make_optimisers(
+    model: nn.Module,
+    lr_habitat: float = 1e-4,
+    lr_movement: float = 1e-5,
+    scheduler_patience: int = 5,
+    scheduler_factor: float = 0.1,
+) -> tuple[tuple, tuple]:
+    """Create Adam optimisers and ReduceLROnPlateau schedulers for the joint model.
+
+    Parameters
+    ----------
+    model:
+        ConvJointModel instance.
+    lr_habitat:
+        Learning rate for the habitat CNN sub-network.
+    lr_movement:
+        Learning rate for the movement FCN sub-network.
+    scheduler_patience:
+        Epochs without improvement before reducing the learning rate.
+    scheduler_factor:
+        Multiplicative factor for learning-rate reduction.
+
+    Returns
+    -------
+    optimisers : (optimiser_movement, optimiser_habitat)
+    schedulers : (scheduler_movement, scheduler_habitat)
+    """
+    opt_movement = optim.Adam(
+        model.fcn_movement_all.parameters(), lr=lr_movement
+    )
+    opt_habitat = optim.Adam(
+        model.conv_habitat.parameters(), lr=lr_habitat
+    )
+    sched_movement = optim.lr_scheduler.ReduceLROnPlateau(
+        opt_movement, patience=scheduler_patience, factor=scheduler_factor
+    )
+    sched_habitat = optim.lr_scheduler.ReduceLROnPlateau(
+        opt_habitat, patience=scheduler_patience, factor=scheduler_factor
+    )
+    return (opt_movement, opt_habitat), (sched_movement, sched_habitat)
+
+
+# ---------------------------------------------------------------------------
+# Per-epoch snapshot helper
+# ---------------------------------------------------------------------------
+
+def _save_snapshot(
+    model: nn.Module,
+    dl_val,
+    snapshot_item: int,
+    epoch: int,
+    history: dict,
+    snapshot_dir: str,
+    device: str,
+) -> None:
+    """Save a 2×2 figure: loss curve + habitat / movement / step surfaces."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    try:
+        sample = dl_val.dataset[snapshot_item]
+    except (TypeError, IndexError):
+        return
+
+    x1, x2, x3, _y, _ = sample
+    x1 = x1.unsqueeze(0).to(device)
+    x2 = x2.unsqueeze(0).to(device)
+    x3 = x3.unsqueeze(0).to(device)
+
+    model.eval()
+    with torch.no_grad():
+        out = model((x1, x2, x3))
+
+    hab_log = out[0, :, :, 0].cpu().numpy()
+    move_log = out[0, :, :, 1].cpu().numpy()
+    step_exp = np.exp(hab_log + move_log)
+    step_norm = step_exp / np.nansum(step_exp)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+
+    axes[0, 0].plot(history["train_losses"], label="train")
+    axes[0, 0].plot(history["val_losses"], label="val")
+    axes[0, 0].set_xlabel("Epoch")
+    axes[0, 0].set_ylabel("NLL loss")
+    axes[0, 0].legend()
+    axes[0, 0].set_title("Training loss")
+
+    axes[0, 1].imshow(np.exp(hab_log), origin="upper", cmap="viridis")
+    axes[0, 1].set_title(f"Habitat (epoch {epoch + 1})")
+
+    axes[1, 0].imshow(np.exp(move_log), origin="upper", cmap="viridis")
+    axes[1, 0].set_title(f"Movement (epoch {epoch + 1})")
+
+    axes[1, 1].imshow(step_norm, origin="upper", cmap="viridis")
+    axes[1, 1].set_title(f"Next step (epoch {epoch + 1})")
+
+    plt.tight_layout()
+    path = os.path.join(snapshot_dir, f"epoch_{epoch + 1:03d}.png")
+    fig.savefig(path, dpi=80)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Full training loop
+# ---------------------------------------------------------------------------
+
+def fit(
+    model: nn.Module,
+    dl_train,
+    dl_val,
+    loss_fn,
+    optimisers: tuple,
+    schedulers: tuple | None = None,
+    *,
+    n_epochs: int = 10,
+    early_stopping: EarlyStopping | None = None,
+    snapshot_dir: str | None = None,
+    snapshot_item: int = 0,
+) -> dict[str, list[float]]:
+    """Train for *n_epochs* with per-epoch validation, scheduling, and snapshots.
+
+    Parameters
+    ----------
+    model:
+        ConvJointModel to train.
+    dl_train:
+        Training DataLoader.
+    dl_val:
+        Validation DataLoader.
+    loss_fn:
+        Callable returning ``(total_loss, habitat_loss, movement_loss)``.
+    optimisers:
+        ``(optimiser_movement, optimiser_habitat)`` from :func:`make_optimisers`.
+    schedulers:
+        ``(sched_movement, sched_habitat)`` — both ``ReduceLROnPlateau``,
+        stepped each epoch on the validation loss.  Pass ``None`` to skip.
+    n_epochs:
+        Maximum number of epochs.
+    early_stopping:
+        :class:`EarlyStopping` instance, or ``None`` to disable.
+    snapshot_dir:
+        Directory for per-epoch 2×2 PNG snapshots.  ``None`` disables saving.
+    snapshot_item:
+        Index into ``dl_val.dataset`` for the snapshot sample.
+
+    Returns
+    -------
+    history : dict[str, list[float]]
+        Keys: ``train_losses``, ``val_losses``,
+        ``val_habitat_losses``, ``val_movement_losses``.
+    """
+    device = get_device()
+    sched_mov, sched_hab = (
+        schedulers if schedulers is not None else (None, None)
+    )
+
+    if snapshot_dir is not None:
+        os.makedirs(snapshot_dir, exist_ok=True)
+
+    history: dict[str, list[float]] = {
+        "train_losses": [],
+        "val_losses": [],
+        "val_habitat_losses": [],
+        "val_movement_losses": [],
+    }
+
+    for epoch in range(n_epochs):
+        print(f"\nEpoch {epoch + 1}/{n_epochs}")
+
+        train_loss = train_loop(dl_train, model, loss_fn, optimisers)
+
+        # Validation — track all three loss components
+        model.eval()
+        val_total = val_hab = val_mov = 0.0
+        n_val = len(dl_val)
+
+        with torch.no_grad():
+            for x1, x2, x3, y, _ in dl_val:
+                x1 = x1.to(device)
+                x2 = x2.to(device)
+                x3 = x3.to(device)
+                y = tuple(t.to(device) for t in y)
+                total, hab, mov = loss_fn(model((x1, x2, x3)), y)
+                val_total += total.detach().item()
+                val_hab += hab.detach().item()
+                val_mov += mov.detach().item()
+
+        val_total /= n_val
+        val_hab /= n_val
+        val_mov /= n_val
+        print(
+            f"Val loss: {val_total:.6f}"
+            f"  (hab: {val_hab:.6f}, mov: {val_mov:.6f})"
+        )
+
+        history["train_losses"].append(float(train_loss))
+        history["val_losses"].append(val_total)
+        history["val_habitat_losses"].append(val_hab)
+        history["val_movement_losses"].append(val_mov)
+
+        if sched_mov is not None:
+            sched_mov.step(val_total)
+        if sched_hab is not None:
+            sched_hab.step(val_total)
+
+        if snapshot_dir is not None:
+            _save_snapshot(
+                model, dl_val, snapshot_item, epoch,
+                history, snapshot_dir, device,
+            )
+
+        if early_stopping is not None:
+            early_stopping(val_total, model)
+            if early_stopping.early_stop:
+                print("Early stopping triggered.")
+                break
+
+    return history

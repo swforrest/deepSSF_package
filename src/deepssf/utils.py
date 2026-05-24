@@ -14,7 +14,6 @@ import re
 import numpy as np
 import torch
 
-
 # ---------------------------------------------------------------------------
 # Device
 # ---------------------------------------------------------------------------
@@ -121,7 +120,9 @@ def subset_raster_all_bands_torch(
     col_stop = px + half + 1
 
     n_bands = raster_tensor.shape[0]
-    subset = torch.full((n_bands, window_size, window_size), -1.0, dtype=raster_tensor.dtype)
+    subset = torch.full(
+        (n_bands, window_size, window_size), -1.0, dtype=raster_tensor.dtype
+    )
 
     vr0 = max(0, row_start)
     vr1 = min(raster_tensor.shape[1], row_stop)
@@ -231,16 +232,20 @@ def subset_layer_vectorized(
         if vr0 < vr1 and vc0 < vc1:
             sr0 = vr0 - row_start
             sc0 = vc0 - col_start
-            subset[sr0:sr0 + (vr1 - vr0), sc0:sc0 + (vc1 - vc0)] = layer_data[vr0:vr1, vc0:vc1]
+            sr1, sc1 = sr0 + (vr1 - vr0), sc0 + (vc1 - vc0)
+            subset[sr0:sr1, sc0:sc1] = layer_data[vr0:vr1, vc0:vc1]
     else:
         n_bands, height, width = layer_data.shape
-        subset = np.full((n_bands, window_size, window_size), -1.0, dtype=layer_data.dtype)
+        subset = np.full(
+            (n_bands, window_size, window_size), -1.0, dtype=layer_data.dtype
+        )
         vr0, vr1 = max(0, row_start), min(height, row_stop)
         vc0, vc1 = max(0, col_start), min(width, col_stop)
         if vr0 < vr1 and vc0 < vc1:
             sr0 = vr0 - row_start
             sc0 = vc0 - col_start
-            subset[:, sr0:sr0 + (vr1 - vr0), sc0:sc0 + (vc1 - vc0)] = layer_data[:, vr0:vr1, vc0:vc1]
+            sr1, sc1 = sr0 + (vr1 - vr0), sc0 + (vc1 - vc0)
+            subset[:, sr0:sr1, sc0:sc1] = layer_data[:, vr0:vr1, vc0:vc1]
 
     return torch.from_numpy(subset.copy()).float(), col_start, row_start
 
@@ -249,13 +254,17 @@ def subset_layer_vectorized(
 # Circular time decoding
 # ---------------------------------------------------------------------------
 
-def recover_hour(sin_term: float | np.ndarray, cos_term: float | np.ndarray) -> float | np.ndarray:
+def recover_hour(
+    sin_term: float | np.ndarray, cos_term: float | np.ndarray
+) -> float | np.ndarray:
     """Recover hour of day (0–24) from its sine/cosine circular encoding."""
     theta = np.arctan2(sin_term, cos_term)
     return (24 * theta) / (2 * np.pi) % 24
 
 
-def recover_yday(sin_term: float | np.ndarray, cos_term: float | np.ndarray) -> float | np.ndarray:
+def recover_yday(
+    sin_term: float | np.ndarray, cos_term: float | np.ndarray
+) -> float | np.ndarray:
     """Recover day of year (0–365) from its sine/cosine circular encoding."""
     theta = np.arctan2(sin_term, cos_term)
     return (365.25 * theta) / (2 * np.pi) % 365.25
@@ -304,7 +313,8 @@ def create_gif(image_folder: str, output_filename: str, fps: int = 10) -> None:
     except ImportError as exc:
         raise ImportError("create_gif requires imageio: pip install imageio") from exc
 
-    images = sorted(glob.glob(os.path.join(image_folder, "*.png")), key=_extract_epoch_index)
+    pattern = os.path.join(image_folder, "*.png")
+    images = sorted(glob.glob(pattern), key=_extract_epoch_index)
     if not images:
         print(f"No PNG images found in {image_folder}")
         return

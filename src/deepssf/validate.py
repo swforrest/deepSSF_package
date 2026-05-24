@@ -94,6 +94,7 @@ def validate_next_step_probs(
     next_step_probs = np.zeros(n)
 
     model.eval()
+    device = next(model.parameters()).device
 
     with torch.no_grad():
         for i in range(1, n):
@@ -121,17 +122,17 @@ def validate_next_step_probs(
             origin_xs = [r[1] for r in results]
             origin_ys = [r[2] for r in results]
 
-            x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0)
+            x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0).to(device)
 
             # Scalar inputs: [1, 4]
             scalars = torch.tensor(
                 [float(sample[c]) for c in scalar_cols], dtype=torch.float32
-            ).unsqueeze(0)
+            ).unsqueeze(0).to(device)
 
             # Previous bearing: [1, 1]
             bearing = torch.tensor(
                 [[float(sample[bearing_col])]], dtype=torch.float32
-            )
+            ).to(device)
 
             out = model((x1, scalars, bearing))
 

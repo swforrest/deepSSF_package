@@ -46,8 +46,9 @@ def test_recover_yday_roundtrip():
 
 def test_subset_raster_with_padding_torch_centre():
     """Window centred inside the raster should contain no padding."""
-    from deepssf.utils import subset_raster_with_padding_torch
     import rasterio.transform
+
+    from deepssf.utils import subset_raster_with_padding_torch
 
     H, W = 200, 200
     raster = torch.ones(H, W)
@@ -60,8 +61,9 @@ def test_subset_raster_with_padding_torch_centre():
 
 def test_subset_raster_with_padding_torch_edge():
     """Window that overlaps the raster edge should be padded with -1."""
-    from deepssf.utils import subset_raster_with_padding_torch
     import rasterio.transform
+
+    from deepssf.utils import subset_raster_with_padding_torch
 
     H, W = 50, 50
     raster = torch.zeros(H, W)
@@ -73,8 +75,9 @@ def test_subset_raster_with_padding_torch_edge():
 
 
 def test_subset_raster_all_bands_torch():
-    from deepssf.utils import subset_raster_all_bands_torch
     import rasterio.transform
+
+    from deepssf.utils import subset_raster_all_bands_torch
 
     raster = torch.ones(4, 100, 100)
     transform = rasterio.transform.from_bounds(0, 0, 100, 100, 100, 100)
@@ -84,8 +87,9 @@ def test_subset_raster_all_bands_torch():
 
 
 def test_subset_raster_with_padding_npy():
-    from deepssf.utils import subset_raster_with_padding_npy
     import rasterio.transform
+
+    from deepssf.utils import subset_raster_with_padding_npy
 
     raster = np.ones((100, 100), dtype=np.float32)
     transform = rasterio.transform.from_bounds(0, 0, 100, 100, 100, 100)
@@ -202,11 +206,11 @@ def test_scalar_to_grid_block_output_shape(small_params):
 
 def test_convjointmodel_forward_shape(small_params):
     """Full forward pass — output must be [B, H, W, 2]."""
-    from deepssf.model import ConvJointModel
-
     # Adjust dense_dim_in_all to match the actual flattened size produced by
     # Conv2d_block_toFC with these tiny hyperparams (image_dim=11, 3 × MP2).
     import math
+
+    from deepssf.model import ConvJointModel
     dim = 11
     for _ in range(3):
         dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)  # conv (stride=1, pad=1 keeps dim)
@@ -287,8 +291,12 @@ def test_negative_log_like_loss_freeze_movement():
     predict = torch.zeros(B, H, W, 2)
     px2 = torch.tensor([2, 2])
     py2 = torch.tensor([2, 2])
-    total_frozen, _, _ = negativeLogLikeLoss("mean", freeze_movement=True)(predict, (px2, py2))
-    total_joint, _, _  = negativeLogLikeLoss("mean", freeze_movement=False)(predict, (px2, py2))
+    total_frozen, _, _ = negativeLogLikeLoss(
+        "mean", freeze_movement=True
+    )(predict, (px2, py2))
+    total_joint, _, _ = negativeLogLikeLoss(
+        "mean", freeze_movement=False
+    )(predict, (px2, py2))
     # With all-zero logits both should be finite; frozen uses only habitat channel
     assert torch.isfinite(total_frozen)
     assert torch.isfinite(total_joint)
@@ -336,15 +344,18 @@ def test_early_stopping_resets_on_improvement(tmp_path):
 
 def test_make_simulation_inputs_shape():
     from deepssf.simulate import make_simulation_inputs
-    x2, hours, ydays = make_simulation_inputs(n_steps=10, starting_yday=90, starting_hour=6)
+    x2, hours, ydays = make_simulation_inputs(
+        n_steps=10, starting_yday=90, starting_hour=6
+    )
     assert x2.shape == (10, 4)
     assert hours.shape == (10,)
     assert ydays.shape == (10,)
 
 
 def test_make_simulation_inputs_cyclic_encoding():
-    from deepssf.simulate import make_simulation_inputs
     import math
+
+    from deepssf.simulate import make_simulation_inputs
     x2, _, _ = make_simulation_inputs(n_steps=1, starting_yday=1, starting_hour=0)
     # hour=0 → sin=0, cos=1
     assert abs(x2[0, 0]) < 1e-10
@@ -362,7 +373,9 @@ def test_make_simulation_inputs_hour_wraps():
 def test_simulate_next_step_returns_coords_and_tensors(small_params):
     """simulate_next_step returns new coordinates and three log-prob tensors."""
     import math
+
     import rasterio.transform
+
     from deepssf.model import ConvJointModel, ModelParams
     from deepssf.simulate import simulate_next_step
 
@@ -399,7 +412,9 @@ def test_simulate_next_step_returns_coords_and_tensors(small_params):
 def test_simulate_trajectory_dataframe_shape(small_params):
     """simulate_trajectory returns a DataFrame with one row per step."""
     import math
+
     import rasterio.transform
+
     from deepssf.model import ConvJointModel, ModelParams
     from deepssf.simulate import simulate_trajectory
 
@@ -412,7 +427,9 @@ def test_simulate_trajectory_dataframe_shape(small_params):
     model = ConvJointModel(params)
 
     W = 11
-    transform = rasterio.transform.from_bounds(0, 0, W * 25 * 10, W * 25 * 10, W * 10, W * 10)
+    transform = rasterio.transform.from_bounds(
+        0, 0, W * 25 * 10, W * 25 * 10, W * 10, W * 10
+    )
     rasters = [torch.ones(W * 10, W * 10) for _ in range(2)]
 
     df = simulate_trajectory(
@@ -434,7 +451,7 @@ def test_simulate_trajectory_dataframe_shape(small_params):
 # deepssf.validate
 # ---------------------------------------------------------------------------
 
-def _make_movement_df(n: int, x_centre: float, y_centre: float) -> "pd.DataFrame":
+def _make_movement_df(n: int, x_centre: float, y_centre: float):
     """Synthetic movement DataFrame with required columns."""
     import pandas as pd
     rng = np.random.default_rng(0)
@@ -460,7 +477,9 @@ def _make_movement_df(n: int, x_centre: float, y_centre: float) -> "pd.DataFrame
 def test_validate_next_step_probs_returns_columns(small_params):
     """validate_next_step_probs appends three probability columns."""
     import math
+
     import rasterio.transform
+
     from deepssf.model import ConvJointModel, ModelParams
     from deepssf.validate import validate_next_step_probs
 
@@ -496,7 +515,9 @@ def test_validate_next_step_probs_returns_columns(small_params):
 def test_validate_next_step_probs_row0_is_zero(small_params):
     """Row 0 must always be 0.0 (no previous bearing)."""
     import math
+
     import rasterio.transform
+
     from deepssf.model import ConvJointModel, ModelParams
     from deepssf.validate import validate_next_step_probs
 
@@ -540,6 +561,7 @@ def test_day_to_s2_month_wraps_to_1_12():
 def test_prepare_movement_df_columns():
     """prepare_movement_df produces the required step-format columns."""
     import pandas as pd
+
     from deepssf.data import prepare_movement_df
 
     raw = pd.read_csv(_CSV_PATH)
@@ -553,6 +575,7 @@ def test_prepare_movement_df_columns():
 def test_prepare_movement_df_row_count():
     """One row is dropped per individual (last fix has no next location)."""
     import pandas as pd
+
     from deepssf.data import prepare_movement_df
 
     raw = pd.read_csv(_CSV_PATH)
@@ -566,6 +589,7 @@ def test_prepare_movement_df_row_count():
 def test_prepare_movement_df_bearing_finite():
     """Bearing values must all be finite (no NaN from missing coords)."""
     import pandas as pd
+
     from deepssf.data import prepare_movement_df
 
     raw = pd.read_csv(_CSV_PATH)
@@ -577,6 +601,7 @@ def test_prepare_movement_df_bearing_finite():
 def test_prepare_movement_df_cyclic_range():
     """Cyclic encodings must stay in [-1, 1]."""
     import pandas as pd
+
     from deepssf.data import prepare_movement_df
 
     raw = pd.read_csv(_CSV_PATH)
@@ -589,6 +614,7 @@ def test_prepare_movement_df_cyclic_range():
 def test_movement_dataset_getitem_shapes():
     """MovementDataset __getitem__ returns correctly shaped tensors."""
     import pandas as pd
+
     from deepssf.data import MovementDataset, prepare_movement_df
 
     raw = pd.read_csv(_CSV_PATH)
@@ -611,6 +637,124 @@ def test_movement_dataset_getitem_shapes():
     assert spatial.shape[-2] == window
     assert scalars.shape == (5,)
     assert bearing.shape == (1,)
+
+
+def test_prepare_movement_df_has_bearing_tm1():
+    """prepare_movement_df includes bearing_tm1 (previous step's bearing)."""
+    import pandas as pd
+
+    from deepssf.data import prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+
+    assert "bearing_tm1" in df.columns
+    assert "yday_t1" in df.columns
+    assert df["bearing_tm1"].iloc[0] == 0.0
+    assert np.isfinite(df["bearing_tm1"].values).all()
+
+
+def test_make_optimisers_returns_tuples(small_params):
+    """make_optimisers returns two tuples of (movement, habitat) optimisers."""
+    import math
+
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.train import make_optimisers
+
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+    model = ConvJointModel(params)
+
+    optimisers, schedulers = make_optimisers(model)
+    assert len(optimisers) == 2
+    assert len(schedulers) == 2
+    opt_mov, opt_hab = optimisers
+    assert isinstance(opt_mov, torch.optim.Adam)
+    assert isinstance(opt_hab, torch.optim.Adam)
+
+
+def test_fit_returns_loss_history(small_params):
+    """fit returns a history dict with the expected keys and epoch count."""
+    import math
+
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.train import fit, make_optimisers, negativeLogLikeLoss
+    from deepssf.utils import get_device
+
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+    device = get_device()
+    model = ConvJointModel(params).to(device)
+
+    n_spatial = params.input_channels - params.dim_in_nonspatial_to_grid
+    H = params.image_dim
+    S = params.dim_in_nonspatial_to_grid
+
+    class _DS:
+        def __len__(self):
+            return 4
+
+    class _DL:
+        dataset = _DS()
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            for _ in range(2):
+                yield (
+                    torch.randn(2, n_spatial, H, H),
+                    torch.randn(2, S),
+                    torch.zeros(2, 1),
+                    (
+                        torch.full((2,), H // 2, dtype=torch.long),
+                        torch.full((2,), H // 2, dtype=torch.long),
+                    ),
+                    ("t", "t"),
+                )
+
+    loss_fn = negativeLogLikeLoss(reduction="mean")
+    optimisers, schedulers = make_optimisers(model)
+    history = fit(
+        model, _DL(), _DL(), loss_fn, optimisers, schedulers,
+        n_epochs=2,
+        snapshot_dir=None,
+    )
+    assert set(history.keys()) == {
+        "train_losses", "val_losses",
+        "val_habitat_losses", "val_movement_losses",
+    }
+    assert len(history["train_losses"]) == 2
+    assert len(history["val_losses"]) == 2
+
+
+@pytest.mark.skipif(not _CSV_PATH.exists(), reason="test dataset not found")
+def test_make_dataloaders_df_parameter():
+    """make_dataloaders accepts df= as an alternative to csv_path."""
+    import pandas as pd
+
+    from deepssf.data import make_dataloaders, prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    step_df = prepare_movement_df(raw)
+
+    dl_train, *_ = make_dataloaders(
+        layer_paths=_LAYER_PATHS,
+        window_size=25,
+        batch_size=4,
+        df=step_df,
+        scalar_cols=["hour_t1_sin1", "hour_t1_cos1",
+                     "yday_t1_sin1", "yday_t1_cos1"],
+    )
+    assert len(dl_train) > 0
 
 
 @pytest.mark.skipif(not _CSV_PATH.exists(), reason="test dataset not found")

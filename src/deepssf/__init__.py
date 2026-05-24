@@ -17,9 +17,19 @@ from deepssf.data import (
     prepare_movement_df,
 )
 from deepssf.model import ConvJointModel, ModelParams
-from deepssf.simulate import make_simulation_inputs, simulate_next_step, simulate_trajectory
-from deepssf.validate import validate_next_step_probs
-from deepssf.train import EarlyStopping, negativeLogLikeLoss, test_loop, train_loop
+from deepssf.simulate import (
+    make_simulation_inputs,
+    simulate_next_step,
+    simulate_trajectory,
+)
+from deepssf.train import (
+    EarlyStopping,
+    fit,
+    make_optimisers,
+    negativeLogLikeLoss,
+    test_loop,
+    train_loop,
+)
 from deepssf.utils import (
     clear_memory,
     create_gif,
@@ -31,6 +41,7 @@ from deepssf.utils import (
     subset_raster_with_padding_npy,
     subset_raster_with_padding_torch,
 )
+from deepssf.validate import validate_next_step_probs
 
 __all__ = [
     "__version__",
@@ -42,6 +53,8 @@ __all__ = [
     "EarlyStopping",
     "train_loop",
     "test_loop",
+    "make_optimisers",
+    "fit",
     # data
     "MovementDataset",
     "load_environmental_layers",

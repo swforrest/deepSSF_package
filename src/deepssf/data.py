@@ -502,6 +502,11 @@ def prepare_movement_df(
         hours = times_dep.hour + times_dep.minute / 60.0
         ydays = times_dep.day_of_year.astype(float)
 
+        bearings = np.arctan2(dy, dx)
+        bearing_tm1 = np.empty_like(bearings)
+        bearing_tm1[0] = 0.0
+        bearing_tm1[1:] = bearings[:-1]
+
         out = pd.DataFrame(
             {
                 "id":            dep[id_col].values,
@@ -510,8 +515,10 @@ def prepare_movement_df(
                 "y1_":           dep[y_col].values,
                 "x2_":           arr[x_col].values,
                 "y2_":           arr[y_col].values,
-                "bearing":       np.arctan2(dy, dx),
+                "bearing":       bearings,
+                "bearing_tm1":   bearing_tm1,
                 "dt_hour":       (times_arr - times_dep).total_seconds() / 3600.0,
+                "yday_t1":       ydays,
                 "hour_t1_sin1":  np.sin(2 * np.pi * hours / 24),
                 "hour_t1_cos1":  np.cos(2 * np.pi * hours / 24),
                 "yday_t1_sin1":  np.sin(2 * np.pi * ydays / 365.25),
@@ -528,8 +535,8 @@ def prepare_movement_df(
 # ---------------------------------------------------------------------------
 
 def make_dataloaders(
-    csv_path: str,
-    layer_paths: dict,
+    csv_path: str | None = None,
+    layer_paths: dict | None = None,
     window_size: int = 101,
     batch_size: int = 32,
     train_split: float = 0.8,
@@ -538,8 +545,9 @@ def make_dataloaders(
     scalar_cols: list[str] | None = None,
     bearing_col: str = "bearing",
     prepare: bool = False,
+    df: pd.DataFrame | None = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    """Read a movement CSV and return train / val / test DataLoaders.
+    """Return train / val / test DataLoaders from a CSV path or prepared DataFrame.
 
     Mirrors the notebook pattern::
 
@@ -550,15 +558,10 @@ def make_dataloaders(
     Parameters
     ----------
     csv_path:
-        Path to the movement CSV file.
+        Path to the movement CSV file.  Either *csv_path* or *df* must be
+        provided.
     layer_paths:
-        Dict passed to :func:`load_environmental_layers`, e.g.::
-
-            {
-                's2_dir': 'path/to/s2/',
-                'slope': 'path/to/slope.tif',
-            }
-
+        Dict passed to :func:`load_environmental_layers`.
     window_size:
         Spatial patch size in pixels.
     batch_size:
@@ -575,19 +578,24 @@ def make_dataloaders(
     bearing_col:
         Forwarded to :class:`MovementDataset`.
     prepare:
-        If ``True``, call :func:`prepare_movement_df` on the raw CSV before
-        building the dataset.  Use this when the CSV has ``(id, time, x, y)``
-        columns and the step-format columns have not yet been computed.
+        If ``True``, call :func:`prepare_movement_df` on the source data
+        before building the dataset.
+    df:
+        Pre-loaded DataFrame.  If provided, *csv_path* is ignored.
 
     Returns
     -------
     dataloader_train, dataloader_val, dataloader_test : DataLoader
     """
-    df = pd.read_csv(csv_path)
+    if df is None and csv_path is None:
+        raise ValueError("Provide either csv_path or df.")
+    if layer_paths is None:
+        raise ValueError("layer_paths is required.")
+    source_df = df if df is not None else pd.read_csv(csv_path)
     if prepare:
-        df = prepare_movement_df(df)
+        source_df = prepare_movement_df(source_df)
     dataset = MovementDataset(
-        df,
+        source_df,
         layer_paths,
         window_size,
         scalar_cols=scalar_cols,

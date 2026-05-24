@@ -28,7 +28,6 @@ from torch import nn
 
 from deepssf.utils import get_device
 
-
 # ---------------------------------------------------------------------------
 # Habitat sub-network
 # ---------------------------------------------------------------------------
@@ -141,15 +140,23 @@ class Params_to_Grid_Block(nn.Module):
         dist[center, center] = 0.3826 * self.pixel_size  # E[r] within centre pixel
 
         self.distance_layer = torch.from_numpy(dist).float()
-        self.bearing_layer  = torch.from_numpy(np.arctan2(center - y_idx, x_idx - center)).float()
+        self.bearing_layer = torch.from_numpy(
+            np.arctan2(center - y_idx, x_idx - center)
+        ).float()
 
     def _gamma_log(self, r, shape, scale):
         shape, scale = shape.to(r.device), scale.to(r.device)
-        return -torch.lgamma(shape) - shape * torch.log(scale) + (shape - 1) * torch.log(r) - r / scale
+        return (
+            -torch.lgamma(shape) - shape * torch.log(scale)
+            + (shape - 1) * torch.log(r) - r / scale
+        )
 
     def _vonmises_log(self, theta, kappa, mu):
         kappa, mu = kappa.to(theta.device), mu.to(theta.device)
-        return kappa * torch.cos(theta - mu) - (np.log(2 * torch.pi) + torch.log(torch.special.i0(kappa)))
+        # torch.special.i0 is unsupported on MPS; compute on CPU and move back
+        i0_val = torch.special.i0(kappa.cpu()).to(kappa.device)
+        log_norm = np.log(2 * torch.pi) + torch.log(i0_val)
+        return kappa * torch.cos(theta - mu) - log_norm
 
     def _expand(self, scalar, dim):
         return scalar.unsqueeze(0).unsqueeze(0).repeat(dim, dim, 1).permute(2, 0, 1)
@@ -171,7 +178,9 @@ class Params_to_Grid_Block(nn.Module):
         gl1 = self._gamma_log(dist, gs1, gc1)
         gl2 = self._gamma_log(dist, gs2, gc2)
         lse = torch.max(gl1, gl2)
-        gamma_grid = lse + torch.log(gw1 * torch.exp(gl1 - lse) + gw2 * torch.exp(gl2 - lse))
+        gamma_grid = lse + torch.log(
+            gw1 * torch.exp(gl1 - lse) + gw2 * torch.exp(gl2 - lse)
+        )
 
         brg = self.bearing_layer.to(x.device)
         mu1 = E(x[:, 6]  + bearing[:, 0], D)
@@ -186,7 +195,9 @@ class Params_to_Grid_Block(nn.Module):
         vl1 = self._vonmises_log(brg, k1, mu1)
         vl2 = self._vonmises_log(brg, k2, mu2)
         lse = torch.max(vl1, vl2)
-        vm_grid = lse + torch.log(vw1 * torch.exp(vl1 - lse) + vw2 * torch.exp(vl2 - lse))
+        vm_grid = lse + torch.log(
+            vw1 * torch.exp(vl1 - lse) + vw2 * torch.exp(vl2 - lse)
+        )
 
         grid = gamma_grid + vm_grid
         return grid - torch.logsumexp(grid, dim=(1, 2), keepdim=True)

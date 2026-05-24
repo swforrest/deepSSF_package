@@ -106,6 +106,8 @@ def simulate_next_step(
     px, py : int
         Sampled pixel column and row within the local crop.
     """
+    device = next(model.parameters()).device
+
     results = [
         subset_raster_with_padding_torch(
             rt, x=x_loc, y=y_loc, window_size=window_size, transform=transform  # type: ignore[arg-type]
@@ -114,7 +116,9 @@ def simulate_next_step(
     ]
     subset_tensors, origin_xs, origin_ys = zip(*results, strict=True)
 
-    x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0)
+    x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0).to(device)
+    scalars_to_grid = scalars_to_grid.to(device)
+    bearing = bearing.to(device)
 
     # Mask cells outside the raster extent (padded with -1 in first channel)
     first_channel = x1[0, 0, :, :]
@@ -131,7 +135,7 @@ def simulate_next_step(
     step_prob = torch.nan_to_num(step_prob, nan=0.0)
     step_prob_norm = step_prob / torch.sum(step_prob)
 
-    flat = step_prob_norm.flatten().detach().numpy()
+    flat = step_prob_norm.flatten().detach().cpu().numpy()
     sampled_index = np.random.choice(flat.size, p=flat)
     sampled_row, sampled_col = np.unravel_index(sampled_index, step_prob_norm.shape)
 
@@ -152,9 +156,9 @@ def simulate_next_step(
     return (
         float(new_x) + jitter_x,
         float(new_y) + jitter_y,
-        hab_log_prob.squeeze(),
-        move_log_prob.squeeze(),
-        step_log_prob.squeeze(),
+        hab_log_prob.squeeze().cpu(),
+        move_log_prob.squeeze().cpu(),
+        step_log_prob.squeeze().cpu(),
         int(sampled_col),
         int(sampled_row),
     )
