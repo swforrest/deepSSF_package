@@ -33,7 +33,7 @@ Tutorials and walkthroughs: https://swforrest.github.io/deepSSF/
 
 ## Citation
 
-If you use deepssf in your research, please cite the paper. See `CITATION.cff`.
+If you use deepssf in your research, please cite the paper. See `CITATION.cff` or use the citation and link to paper below.
 
 Forrest, S. W., Pagendam, D., Hassan, C., Potts, J. R., Drovandi, C., Bode, M., & Hoskins, A. J. (2026). **Predicting animal movement with deepSSF : A deep learning step selection framework**. Methods in Ecology and Evolution, 17(2), 371–391. https://doi.org/10.1111/2041-210x.70136
 
