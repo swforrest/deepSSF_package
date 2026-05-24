@@ -11,6 +11,7 @@ __version__ = "0.1.0"
 
 from deepssf.data import MovementDataset, load_environmental_layers, load_s2_data
 from deepssf.model import ConvJointModel, ModelParams
+from deepssf.simulate import make_simulation_inputs, simulate_next_step, simulate_trajectory
 from deepssf.train import EarlyStopping, negativeLogLikeLoss, test_loop, train_loop
 from deepssf.utils import (
     clear_memory,
@@ -38,6 +39,10 @@ __all__ = [
     "MovementDataset",
     "load_environmental_layers",
     "load_s2_data",
+    # simulate
+    "make_simulation_inputs",
+    "simulate_next_step",
+    "simulate_trajectory",
     # utils
     "get_device",
     "clear_memory",

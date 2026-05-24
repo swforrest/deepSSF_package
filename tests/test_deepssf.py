@@ -292,3 +292,103 @@ def test_early_stopping_resets_on_improvement(tmp_path):
     es(0.5, model)   # new best — counter resets
     assert es.counter == 0
     assert not es.early_stop
+
+
+# ---------------------------------------------------------------------------
+# deepssf.simulate
+# ---------------------------------------------------------------------------
+
+def test_make_simulation_inputs_shape():
+    from deepssf.simulate import make_simulation_inputs
+    x2, hours, ydays = make_simulation_inputs(n_steps=10, starting_yday=90, starting_hour=6)
+    assert x2.shape == (10, 4)
+    assert hours.shape == (10,)
+    assert ydays.shape == (10,)
+
+
+def test_make_simulation_inputs_cyclic_encoding():
+    from deepssf.simulate import make_simulation_inputs
+    import math
+    x2, _, _ = make_simulation_inputs(n_steps=1, starting_yday=1, starting_hour=0)
+    # hour=0 → sin=0, cos=1
+    assert abs(x2[0, 0]) < 1e-10
+    assert abs(x2[0, 1] - 1.0) < 1e-10
+    # yday=1 → sin=sin(2π/365.25), cos=cos(2π/365.25)
+    assert abs(x2[0, 2] - math.sin(2 * math.pi / 365.25)) < 1e-10
+
+
+def test_make_simulation_inputs_hour_wraps():
+    from deepssf.simulate import make_simulation_inputs
+    _, hours, _ = make_simulation_inputs(n_steps=25, starting_yday=1, starting_hour=0)
+    assert hours[24] == 0.0  # wraps at 24
+
+
+def test_simulate_next_step_returns_coords_and_tensors(small_params):
+    """simulate_next_step returns new coordinates and three log-prob tensors."""
+    import math
+    import rasterio.transform
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.simulate import simulate_next_step
+
+    # Build a working model (same dim calculation as test_convjointmodel_forward_shape)
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+    model = ConvJointModel(params)
+    model.eval()
+
+    W = 11
+    transform = rasterio.transform.from_bounds(0, 0, W * 25, W * 25, W, W)
+    # Two spatial raster channels (image_dim=11, but landscape larger than crop)
+    rasters = [torch.ones(W * 4, W * 4) for _ in range(2)]
+    scalars = torch.zeros(1, 4)
+    bearing = torch.zeros(1, 1)
+
+    new_x, new_y, hab, move, step, px, py = simulate_next_step(
+        model, rasters, scalars, bearing, window_size=W,
+        x_loc=W * 25 / 2, y_loc=W * 25 / 2, transform=transform,
+    )
+    assert isinstance(new_x, float)
+    assert isinstance(new_y, float)
+    assert hab.shape == (W, W)
+    assert move.shape == (W, W)
+    assert step.shape == (W, W)
+    assert 0 <= px < W
+    assert 0 <= py < W
+
+
+def test_simulate_trajectory_dataframe_shape(small_params):
+    """simulate_trajectory returns a DataFrame with one row per step."""
+    import math
+    import rasterio.transform
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.simulate import simulate_trajectory
+
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+    model = ConvJointModel(params)
+
+    W = 11
+    transform = rasterio.transform.from_bounds(0, 0, W * 25 * 10, W * 25 * 10, W * 10, W * 10)
+    rasters = [torch.ones(W * 10, W * 10) for _ in range(2)]
+
+    df = simulate_trajectory(
+        model,
+        get_landscape=lambda _month: rasters,
+        transform=transform,
+        start_x=W * 25 * 5,
+        start_y=W * 25 * 5,
+        n_steps=3,
+        starting_yday=1,
+        window_size=W,
+    )
+    assert len(df) == 3
+    for col in ("x", "y", "hour", "yday", "month_index"):
+        assert col in df.columns
