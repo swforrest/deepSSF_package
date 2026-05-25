@@ -50,6 +50,7 @@ dependencies = [
 
 # --- Optional dependencies: installed only when asked for ---------------------
 # `pip install -e ".[dev]"` gives you the development toolchain.
+# `pip install -e ".[examples]"` adds Jupyter for running the example notebooks.
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
@@ -57,6 +58,10 @@ dev = [
     "pre-commit>=3.7",
     "build>=1.2",     # builds the distributable files
     "twine>=5.0",     # uploads them to PyPI
+]
+examples = [
+    "jupyterlab>=4.0",
+    "ipykernel>=6.0",
 ]
 
 [project.urls]

@@ -515,9 +515,12 @@ def prepare_movement_df(
                 "y1_":           dep[y_col].values,
                 "x2_":           arr[x_col].values,
                 "y2_":           arr[y_col].values,
+                "dx":            dx,
+                "dy":            dy,
                 "bearing":       bearings,
                 "bearing_tm1":   bearing_tm1,
                 "dt_hour":       (times_arr - times_dep).total_seconds() / 3600.0,
+                "hour_t1":       hours,
                 "yday_t1":       ydays,
                 "hour_t1_sin1":  np.sin(2 * np.pi * hours / 24),
                 "hour_t1_cos1":  np.cos(2 * np.pi * hours / 24),
@@ -528,6 +531,43 @@ def prepare_movement_df(
         frames.append(out)
 
     return pd.concat(frames, ignore_index=True)
+
+
+def filter_steps_by_window(
+    df: pd.DataFrame,
+    window_size: int,
+    pixel_size: float,
+) -> pd.DataFrame:
+    """Drop steps whose displacement exceeds the spatial window.
+
+    Steps that land outside the ``window_size × window_size`` crop centred on
+    the departure location will produce an out-of-bounds index in the loss
+    function.  Call this after :func:`prepare_movement_df` and before
+    :func:`make_dataloaders`.
+
+    Parameters
+    ----------
+    df:
+        Output of :func:`prepare_movement_df`; must contain ``dx`` and ``dy``
+        columns (displacement in CRS units, typically metres).
+    window_size:
+        Side length of the spatial crop in pixels (must match the value passed
+        to :func:`make_dataloaders`).
+    pixel_size:
+        Size of one raster pixel in the same CRS units as ``dx``/``dy``
+        (e.g. 25 for a 25 m resolution raster).
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered copy of *df* with out-of-range steps removed.
+    """
+    half_extent = (window_size - 1) * pixel_size / 2
+    mask = (
+        (df["dx"].abs() < half_extent) &
+        (df["dy"].abs() < half_extent)
+    )
+    return df[mask].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

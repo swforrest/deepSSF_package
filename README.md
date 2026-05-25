@@ -6,13 +6,77 @@ This package provides the reusable, installable implementation of the deepSSF
 method. The accompanying paper, tutorials, and reproducibility code live at the
 [deepSSF project site](https://swforrest.github.io/deepSSF/).
 
-## Installation
+## Setting up (for users new to Python)
+
+If you are coming from R, think of a conda environment the way you think of
+an `renv` project library — it is a self-contained Python installation that
+keeps this project's packages separate from everything else on your computer.
+The steps below create one for deepssf and should take about five minutes.
+
+### 1. Install Miniconda (once, system-wide)
+
+Download and run the installer from the
+[official Miniconda page](https://docs.anaconda.com/miniconda/).
+
+- **Windows**: use the **Anaconda Prompt** for all subsequent commands, and
+  choose an install path that contains **no spaces** (e.g. `C:\miniconda3`).
+- **macOS / Linux**: a normal terminal works fine.
+
+> **Miniforge alternative**: if you prefer to avoid Anaconda's default channel
+> entirely, [Miniforge](https://github.com/conda-forge/miniforge) is a
+> drop-in replacement that ships with `conda-forge` as the only channel.
+
+### 2. Create the environment
+
+```bash
+git clone https://github.com/swforrest/deepssf
+cd deepssf
+conda env create -f environment.yml
+```
+
+This installs Python 3.11, the geospatial libraries (rasterio / GDAL / PROJ),
+Jupyter Lab, and the deepssf package itself with all of its dependencies.
+PyTorch is installed via pip with no extra flags — pip automatically picks the
+right build for your hardware: **MPS on Apple Silicon, CUDA on NVIDIA GPUs,
+CPU everywhere else**. No configuration is needed; the package selects the
+correct backend at runtime.
+
+### 3. Activate the environment
+
+```bash
+conda activate deepssf
+```
+
+You will need to run this once per terminal session before using deepssf.
+
+### 4. (Optional) Register the Jupyter kernel
+
+If you use VS Code or another editor that manages its own Jupyter kernel list,
+register the environment so it appears as a kernel option:
+
+```bash
+python -m ipykernel install --user --name deepssf --display-name "Python (deepssf)"
+```
+
+### 5. Launch Jupyter Lab
+
+```bash
+jupyter lab
+```
+
+Then open `examples/deepssf_train_validate_example.ipynb` to get started.
+
+---
+
+## Installation (pip only)
+
+If you manage your own Python environment, install deepssf with:
 
 ```bash
 pip install deepssf
 ```
 
-Development install (editable, with tooling):
+Development install (editable, with linting and testing tools):
 
 ```bash
 git clone https://github.com/swforrest/deepssf
@@ -35,7 +99,7 @@ Tutorials and walkthroughs: https://swforrest.github.io/deepSSF/
 
 If you use deepssf in your research, please cite the paper. See `CITATION.cff` or use the citation and link to paper below.
 
-Forrest, S. W., Pagendam, D., Hassan, C., Potts, J. R., Drovandi, C., Bode, M., & Hoskins, A. J. (2026). **Predicting animal movement with deepSSF : A deep learning step selection framework**. Methods in Ecology and Evolution, 17(2), 371–391. https://doi.org/10.1111/2041-210x.70136
+Forrest, S. W., Pagendam, D., Hassan, C., Potts, J. R., Drovandi, C., Bode, M., & Hoskins, A. J. (2026). **Predicting animal movement with deepSSF : A deep learning step selection framework**. Methods in Ecology and Evolution, 17(2), 371–391. https://doi.org/10.1111/2041-210x.70136
 
 ## License
 

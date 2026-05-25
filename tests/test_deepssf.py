@@ -567,7 +567,8 @@ def test_prepare_movement_df_columns():
     raw = pd.read_csv(_CSV_PATH)
     df = prepare_movement_df(raw)
 
-    required = {"x1_", "y1_", "x2_", "y2_", "t1_", "bearing", "dt_hour",
+    required = {"x1_", "y1_", "x2_", "y2_", "t1_", "dx", "dy", "bearing",
+                "dt_hour", "hour_t1", "yday_t1",
                 "hour_t1_sin1", "hour_t1_cos1", "yday_t1_sin1", "yday_t1_cos1"}
     assert required.issubset(df.columns)
 
@@ -652,6 +653,45 @@ def test_prepare_movement_df_has_bearing_tm1():
     assert "yday_t1" in df.columns
     assert df["bearing_tm1"].iloc[0] == 0.0
     assert np.isfinite(df["bearing_tm1"].values).all()
+
+
+def test_prepare_movement_df_has_dx_dy():
+    """prepare_movement_df includes dx and dy displacement columns."""
+    import pandas as pd
+
+    from deepssf.data import prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+
+    assert "dx" in df.columns
+    assert "dy" in df.columns
+    assert np.isfinite(df["dx"].values).all()
+    assert np.isfinite(df["dy"].values).all()
+    # dx = x2_ - x1_, dy = y2_ - y1_
+    np.testing.assert_allclose(df["dx"].values, df["x2_"].values - df["x1_"].values)
+    np.testing.assert_allclose(df["dy"].values, df["y2_"].values - df["y1_"].values)
+
+
+def test_filter_steps_by_window_removes_large_steps():
+    """filter_steps_by_window drops steps that exceed the spatial window."""
+    import pandas as pd
+
+    from deepssf.data import filter_steps_by_window, prepare_movement_df
+
+    raw = pd.read_csv(_CSV_PATH)
+    df = prepare_movement_df(raw)
+
+    window_size = 25
+    pixel_size = 25.0
+    filtered = filter_steps_by_window(
+        df, window_size=window_size, pixel_size=pixel_size
+    )
+
+    half_extent = (window_size - 1) * pixel_size / 2
+    assert (filtered["dx"].abs() < half_extent).all()
+    assert (filtered["dy"].abs() < half_extent).all()
+    assert len(filtered) <= len(df)
 
 
 def test_make_optimisers_returns_tuples(small_params):

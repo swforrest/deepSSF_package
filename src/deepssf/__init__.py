@@ -11,6 +11,7 @@ __version__ = "0.1.0"
 
 from deepssf.data import (
     MovementDataset,
+    filter_steps_by_window,
     load_environmental_layers,
     load_s2_data,
     make_dataloaders,
@@ -57,6 +58,7 @@ __all__ = [
     "fit",
     # data
     "MovementDataset",
+    "filter_steps_by_window",
     "load_environmental_layers",
     "load_s2_data",
     "make_dataloaders",

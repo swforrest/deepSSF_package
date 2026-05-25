@@ -1,0 +1,33 @@
+name: deepssf
+
+channels:
+  - conda-forge
+  - nodefaults    # prevent system-wide channels (e.g. defaults) from being merged in
+
+dependencies:
+  # Python runtime
+  - python=3.11
+  - pip
+
+  # Jupyter — kernel registration works most reliably when these come from conda.
+  # These are pure-Python packages and do NOT pull in any OpenMP/BLAS stack.
+  - jupyterlab>=4.0
+  - ipykernel>=6.0
+
+  - pip:
+    # PyTorch: plain package name with no --index-url lets pip choose the
+    # platform-correct build automatically — MPS on macOS, CUDA on NVIDIA
+    # Linux/Windows, CPU everywhere else. The runtime helper get_device()
+    # selects the right backend; no manual configuration needed.
+    - torch>=2.0
+
+    # rasterio via pip: the macOS ARM64 and Linux wheels bundle GDAL/PROJ,
+    # so no conda-forge GDAL stack is needed. This avoids the OpenMP
+    # library conflict (conda-forge llvm-openmp vs pip-torch's bundled
+    # libomp) that occurs on macOS when rasterio comes from conda-forge.
+    - rasterio>=1.3
+
+    # Install the package itself (editable) plus its [examples] extras.
+    # All remaining Python deps (numpy, pandas, matplotlib, imageio, …) are
+    # declared in pyproject.toml and pulled in here — no duplication needed.
+    - -e ".[examples]"
