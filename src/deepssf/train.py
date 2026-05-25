@@ -365,6 +365,8 @@ def make_optimisers(
 
 def _save_snapshot(
     model: nn.Module,
+    n_conv_layers: int,
+    window_size: int,
     dl_val,
     snapshot_item: int,
     epoch: int,
@@ -392,8 +394,23 @@ def _save_snapshot(
 
     hab_log = out[0, :, :, 0].cpu().numpy()
     move_log = out[0, :, :, 1].cpu().numpy()
-    step_exp = np.exp(hab_log + move_log)
-    step_norm = step_exp / np.nansum(step_exp)
+    step_log = hab_log + move_log
+
+    # Boolean mask: True = cells to remove
+    edge_mask = np.zeros_like(hab_log, dtype=bool)
+
+    edge_mask[:, :n_conv_layers] = True
+    edge_mask[:, window_size - n_conv_layers:] = True
+    edge_mask[:n_conv_layers, :] = True
+    edge_mask[window_size - n_conv_layers:, :] = True
+
+    # Apply mask
+    hab_log_plot = hab_log.copy()
+    move_log_plot = move_log.copy()
+    step_log_plot = step_log.copy()
+
+    hab_log_plot[edge_mask] = np.nan
+    step_log_plot[edge_mask] = np.nan
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
 
@@ -404,14 +421,17 @@ def _save_snapshot(
     axes[0, 0].legend()
     axes[0, 0].set_title("Training loss")
 
-    axes[0, 1].imshow(np.exp(hab_log), origin="upper", cmap="viridis")
-    axes[0, 1].set_title(f"Habitat (epoch {epoch + 1})")
+    axes[0, 1].imshow(hab_log_plot, origin="upper", cmap="viridis")
+    # axes[0, 1].imshow(np.exp(hab_log_plot), origin="upper", cmap="viridis")
+    axes[0, 1].set_title(f"Habitat - log (epoch {epoch + 1})")
 
-    axes[1, 0].imshow(np.exp(move_log), origin="upper", cmap="viridis")
-    axes[1, 0].set_title(f"Movement (epoch {epoch + 1})")
+    axes[1, 0].imshow(move_log_plot, origin="upper", cmap="viridis")
+    # axes[1, 0].imshow(np.exp(move_log_plot), origin="upper", cmap="viridis")
+    axes[1, 0].set_title(f"Movement - log (epoch {epoch + 1})")
 
-    axes[1, 1].imshow(step_norm, origin="upper", cmap="viridis")
-    axes[1, 1].set_title(f"Next step (epoch {epoch + 1})")
+    axes[1, 1].imshow(step_log_plot, origin="upper", cmap="viridis")
+    # axes[1, 1].imshow(np.exp(step_log_plot), origin="upper", cmap="viridis")
+    axes[1, 1].set_title(f"Next step - log (epoch {epoch + 1})")
 
     plt.tight_layout()
     path = os.path.join(snapshot_dir, f"epoch_{epoch + 1:03d}.png")
@@ -425,6 +445,8 @@ def _save_snapshot(
 
 def fit(
     model: nn.Module,
+    n_conv_layers: int,
+    window_size: int,
     dl_train,
     dl_val,
     loss_fn,
@@ -524,7 +546,8 @@ def fit(
 
         if snapshot_dir is not None:
             _save_snapshot(
-                model, dl_val, snapshot_item, epoch,
+                model, n_conv_layers, window_size, 
+                dl_val, snapshot_item, epoch,
                 history, snapshot_dir, device,
             )
 

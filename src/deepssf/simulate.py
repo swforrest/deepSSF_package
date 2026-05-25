@@ -27,6 +27,7 @@ def make_simulation_inputs(
     n_steps: int,
     starting_yday: float,
     starting_hour: float = 0.0,
+    time_between_steps: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pre-compute cyclic scalar inputs for a simulated trajectory.
 
@@ -38,11 +39,13 @@ def make_simulation_inputs(
         Day of year at the first step (1–365).
     starting_hour:
         Hour of day at the first step (0–24).
-
+    time_between_steps:
+        Time interval between consecutive steps in hours.
+            Used to compute the hour and day-of-year for each step.  Defaults to 1.0 (i.e. 1 hour between steps).
     Returns
     -------
-    x2_full : ndarray, shape (n_steps, 4)
-        Rows are [sin_hour, cos_hour, sin_yday, cos_yday] for each step.
+    x2_full : ndarray, shape (n_steps, 5)
+        Rows are [sin_hour, cos_hour, sin_yday, cos_yday, time_between_steps] for each step.
     hour_t2 : ndarray, shape (n_steps,)
         Hour value at each step.
     yday_t2 : ndarray, shape (n_steps,)
@@ -50,17 +53,18 @@ def make_simulation_inputs(
     """
     hour_t2 = np.zeros(n_steps)
     yday_t2 = np.zeros(n_steps)
-    x2_full = np.zeros((n_steps, 4))
+    x2_full = np.zeros((n_steps, 5))
 
     for i in range(n_steps):
-        hour = (starting_hour + i) % 24
-        yday = ((starting_yday - 1 + i) % 365) + 1
+        hour = (starting_hour + i * time_between_steps) % 24
+        yday = ((starting_yday - 1 + i * time_between_steps/24) % 365) + 1
         hour_t2[i] = hour
         yday_t2[i] = yday
         x2_full[i, 0] = np.sin(2 * np.pi * hour / 24)
         x2_full[i, 1] = np.cos(2 * np.pi * hour / 24)
         x2_full[i, 2] = np.sin(2 * np.pi * yday / 365.25)
         x2_full[i, 3] = np.cos(2 * np.pi * yday / 365.25)
+        x2_full[i, 4] = time_between_steps
 
     return x2_full, hour_t2, yday_t2
 
@@ -173,6 +177,7 @@ def simulate_trajectory(
     n_steps: int,
     starting_yday: float = 1.0,
     starting_hour: float = 0.0,
+    time_between_steps: float = 1.0,
     window_size: int = 101,
     base_year: int = 2018,
     month_index_fn: Callable[[float], int] | None = None,
@@ -216,7 +221,7 @@ def simulate_trajectory(
     """
     model.eval()
     x2_full, hour_t2, yday_t2 = make_simulation_inputs(
-        n_steps, starting_yday, starting_hour
+        n_steps, starting_yday, starting_hour, time_between_steps
     )
 
     _month_fn = month_index_fn if month_index_fn is not None else (

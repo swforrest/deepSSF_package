@@ -1,0 +1,2371 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.37">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>deepSSF — train, validate, simulate</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.5.1/dist/jquery.min.js" integrity="sha384-ZvpUoO/+PpLXR1lu4jmpXWu80pZlYUAfxl5NsBMWOEPSjUn/6Z/hRTt8+pR6L4N2" crossorigin="anonymous"></script><script src="deepssf_train_validate_example_files/libs/clipboard/clipboard.min.js"></script>
+<script src="deepssf_train_validate_example_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="deepssf_train_validate_example_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="deepssf_train_validate_example_files/libs/quarto-html/popper.min.js"></script>
+<script src="deepssf_train_validate_example_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="deepssf_train_validate_example_files/libs/quarto-html/anchor.min.js"></script>
+<link href="deepssf_train_validate_example_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="deepssf_train_validate_example_files/libs/quarto-html/quarto-syntax-highlighting-7f8f88aac4f3542376d5c11b86a4c14d.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="deepssf_train_validate_example_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="deepssf_train_validate_example_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="deepssf_train_validate_example_files/libs/bootstrap/bootstrap-138a6193a3bd40baf1e627da441a4734.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="https://cdn.jsdelivr.net/npm/requirejs@2.3.6/require.min.js" integrity="sha384-c9c+LnTbwQ3aujuU7ULEPVvgLs+Fn6fJUvIGTsuu1ZcCf11fiEubah0ttpca4ntM sha384-6V1/AdqZRWk1KAlWbKBlGhN7VG4iE/yAZcO6NZPMF8od0vukrvr0tg4qY6NSrItx" crossorigin="anonymous"></script>
+
+<script type="application/javascript">define('jquery', [],function() {return window.jQuery;})</script>
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">deepSSF — train, validate, simulate</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>End-to-end example using the bundled buffalo GPS dataset and two static raster covariates (NDVI and slope). The notebook calls the package throughout.</p>
+<p><strong>Sections</strong> 1. Import data 2. Prepare data 3. Train model 4. Validate against withheld data 5. Simulate a trajectory</p>
+<div id="cell-2" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:37.751123Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:37.750945Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.557953Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.557509Z&quot;}}" data-execution_count="1">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> math</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> rasterio</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> deepssf</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> deepssf <span class="im">import</span> (</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    ConvJointModel,</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    EarlyStopping,</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    ModelParams,</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>    create_gif,</span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>    fit,</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>    get_device,</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    load_environmental_layers,</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>    make_dataloaders,</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    make_optimisers,</span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    negativeLogLikeLoss,</span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>    filter_steps_by_window,</span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>    prepare_movement_df,</span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>    simulate_trajectory,</span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>    validate_next_step_probs,</span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datetime <span class="im">import</span> datetime                <span class="co"># Date/time utilities</span></span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> IPython.display <span class="im">import</span> Image            <span class="co"># For plotting GIFs</span></span>
+<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> rasterio.plot <span class="im">import</span> show               <span class="co"># For plotting raster layers</span></span>
+<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"deepssf </span><span class="sc">{</span>deepssf<span class="sc">.</span>__version__<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"torch </span><span class="sc">{</span>torch<span class="sc">.</span>__version__<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>deepssf 0.1.0
+torch 2.12.0</code></pre>
+</div>
+</div>
+<div id="cell-3" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.571198Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.571076Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.584210Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.583922Z&quot;}}" data-execution_count="2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Reproducibility</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>torch.manual_seed(<span class="dv">42</span>)</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>np.random.seed(<span class="dv">42</span>)</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>DEVICE <span class="op">=</span> get_device()</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Device: </span><span class="sc">{</span>DEVICE<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Device: mps</code></pre>
+</div>
+</div>
+<section id="import-data" class="level2">
+<h2 class="anchored" data-anchor-id="import-data">1 Import data</h2>
+<div id="cell-5" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.585467Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.585399Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.587274Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.586952Z&quot;}}" data-execution_count="3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>DATA_DIR <span class="op">=</span> Path(<span class="st">"../src/deepssf/datasets/data"</span>)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>CSV_PATH <span class="op">=</span> DATA_DIR <span class="op">/</span> <span class="st">"buffalo_djelk_id2005.csv"</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>LAYER_PATHS <span class="op">=</span> {</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"ndvi"</span>:  <span class="bu">str</span>(DATA_DIR <span class="op">/</span> <span class="st">"ndvi_2005.tif"</span>),</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"slope"</span>: <span class="bu">str</span>(DATA_DIR <span class="op">/</span> <span class="st">"slope_2005.tif"</span>),</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>OUTPUT_DIR  <span class="op">=</span> Path(<span class="st">"outputs"</span>)</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>SNAPSHOT_DIR <span class="op">=</span> OUTPUT_DIR <span class="op">/</span> <span class="st">"training_snapshots"</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>OUTPUT_DIR.mkdir(exist_ok<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<div id="cell-6" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.588201Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.588148Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.597239Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.596886Z&quot;}}" data-execution_count="4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>raw_df <span class="op">=</span> pd.read_csv(CSV_PATH)</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Raw GPS fixes : </span><span class="sc">{</span><span class="bu">len</span>(raw_df)<span class="sc">:,}</span><span class="ss">"</span>)</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Individuals   : </span><span class="sc">{</span>raw_df[<span class="st">'id'</span>]<span class="sc">.</span>nunique()<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Sort by the individual ID and timestamp to ensure correct temporal order</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>raw_df <span class="op">=</span> raw_df.sort_values(by<span class="op">=</span>[<span class="st">"id"</span>, <span class="st">"time"</span>]).reset_index(drop<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="co"># # Convert the 'time' column to the correct timezone (here Australia/Darwin) </span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="co"># raw_df["time"] = (</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="co">#         pd.to_datetime(raw_df["time"], utc=True)</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="co">#         .dt.tz_convert("Australia/Darwin")</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="co">#     )</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>raw_df.head()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Raw GPS fixes : 10,297
+Individuals   : 1</code></pre>
+</div>
+<div class="cell-output cell-output-display" data-execution_count="4">
+<div>
+
+
+<table class="dataframe caption-top table table-sm table-striped small" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">id</th>
+<th data-quarto-table-cell-role="th">time</th>
+<th data-quarto-table-cell-role="th">x</th>
+<th data-quarto-table-cell-role="th">y</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">0</th>
+<td>2005</td>
+<td>2018-07-25T00:04:02Z</td>
+<td>41941.331695</td>
+<td>-1.435875e+06</td>
+</tr>
+<tr class="even">
+<th data-quarto-table-cell-role="th">1</th>
+<td>2005</td>
+<td>2018-07-25T01:04:23Z</td>
+<td>41969.310875</td>
+<td>-1.435671e+06</td>
+</tr>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">2</th>
+<td>2005</td>
+<td>2018-07-25T02:04:39Z</td>
+<td>41921.521939</td>
+<td>-1.435654e+06</td>
+</tr>
+<tr class="even">
+<th data-quarto-table-cell-role="th">3</th>
+<td>2005</td>
+<td>2018-07-25T03:04:17Z</td>
+<td>41779.439594</td>
+<td>-1.435601e+06</td>
+</tr>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">4</th>
+<td>2005</td>
+<td>2018-07-25T04:04:39Z</td>
+<td>41841.203272</td>
+<td>-1.435635e+06</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<div id="cell-7" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.598170Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.598108Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.631058Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.630725Z&quot;}}" data-execution_count="5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>env_layers, raster_transform <span class="op">=</span> load_environmental_layers(LAYER_PATHS)</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"Layers loaded:"</span>, <span class="bu">list</span>(env_layers.keys()))</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> name, arr <span class="kw">in</span> env_layers.items():</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"  </span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">: shape=</span><span class="sc">{</span>arr<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">, min=</span><span class="sc">{</span>arr<span class="sc">.</span><span class="bu">min</span>()<span class="sc">:.3f}</span><span class="ss">, max=</span><span class="sc">{</span>arr<span class="sc">.</span><span class="bu">max</span>()<span class="sc">:.3f}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Layer 'ndvi': min=-0.06614641100168228, max=0.731696367263794 → scaled to [0, 1]
+Layer 'slope': min=0.00013558653881773353, max=12.298083305358887 → scaled to [0, 1]
+Layers loaded: ['ndvi', 'slope']
+  ndvi: shape=(758, 1175), min=0.000, max=1.090
+  slope: shape=(758, 1175), min=0.000, max=1.000</code></pre>
+</div>
+</div>
+</section>
+<section id="prepare-data" class="level2">
+<h2 class="anchored" data-anchor-id="prepare-data">2 Prepare data</h2>
+<div id="cell-9" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.632353Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.632282Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.650894Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.650485Z&quot;}}" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>step_df <span class="op">=</span> prepare_movement_df(raw_df)</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Movement steps : </span><span class="sc">{</span><span class="bu">len</span>(step_df)<span class="sc">:,}</span><span class="ss">  (</span><span class="sc">{</span><span class="bu">len</span>(raw_df) <span class="op">-</span> <span class="bu">len</span>(step_df)<span class="sc">}</span><span class="ss"> dropped — last fix per individual)"</span>)</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>step_df.head()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Movement steps : 10,296  (1 dropped — last fix per individual)</code></pre>
+</div>
+<div class="cell-output cell-output-display" data-execution_count="6">
+<div>
+
+
+<table class="dataframe caption-top table table-sm table-striped small" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">id</th>
+<th data-quarto-table-cell-role="th">t1_</th>
+<th data-quarto-table-cell-role="th">x1_</th>
+<th data-quarto-table-cell-role="th">y1_</th>
+<th data-quarto-table-cell-role="th">t2_</th>
+<th data-quarto-table-cell-role="th">x2_</th>
+<th data-quarto-table-cell-role="th">y2_</th>
+<th data-quarto-table-cell-role="th">dx</th>
+<th data-quarto-table-cell-role="th">dy</th>
+<th data-quarto-table-cell-role="th">bearing</th>
+<th data-quarto-table-cell-role="th">bearing_tm1</th>
+<th data-quarto-table-cell-role="th">dt_hour</th>
+<th data-quarto-table-cell-role="th">hour_t1</th>
+<th data-quarto-table-cell-role="th">yday_t1</th>
+<th data-quarto-table-cell-role="th">hour_t1_sin1</th>
+<th data-quarto-table-cell-role="th">hour_t1_cos1</th>
+<th data-quarto-table-cell-role="th">yday_t1_sin1</th>
+<th data-quarto-table-cell-role="th">yday_t1_cos1</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">0</th>
+<td>2005</td>
+<td>2018-07-25T00:04:02Z</td>
+<td>41941.331695</td>
+<td>-1.435875e+06</td>
+<td>2018-07-25T01:04:23Z</td>
+<td>41969.310875</td>
+<td>-1.435671e+06</td>
+<td>27.979180</td>
+<td>204.064135</td>
+<td>1.434536</td>
+<td>0.000000</td>
+<td>1.005833</td>
+<td>0.066667</td>
+<td>206.0</td>
+<td>0.017452</td>
+<td>0.999848</td>
+<td>-0.391358</td>
+<td>-0.920239</td>
+</tr>
+<tr class="even">
+<th data-quarto-table-cell-role="th">1</th>
+<td>2005</td>
+<td>2018-07-25T01:04:23Z</td>
+<td>41969.310875</td>
+<td>-1.435671e+06</td>
+<td>2018-07-25T02:04:39Z</td>
+<td>41921.521939</td>
+<td>-1.435654e+06</td>
+<td>-47.788936</td>
+<td>16.857110</td>
+<td>2.802478</td>
+<td>1.434536</td>
+<td>1.004444</td>
+<td>1.066667</td>
+<td>206.0</td>
+<td>0.275637</td>
+<td>0.961262</td>
+<td>-0.391358</td>
+<td>-0.920239</td>
+</tr>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">2</th>
+<td>2005</td>
+<td>2018-07-25T02:04:39Z</td>
+<td>41921.521939</td>
+<td>-1.435654e+06</td>
+<td>2018-07-25T03:04:17Z</td>
+<td>41779.439594</td>
+<td>-1.435601e+06</td>
+<td>-142.082345</td>
+<td>53.568427</td>
+<td>2.781049</td>
+<td>2.802478</td>
+<td>0.993889</td>
+<td>2.066667</td>
+<td>206.0</td>
+<td>0.515038</td>
+<td>0.857167</td>
+<td>-0.391358</td>
+<td>-0.920239</td>
+</tr>
+<tr class="even">
+<th data-quarto-table-cell-role="th">3</th>
+<td>2005</td>
+<td>2018-07-25T03:04:17Z</td>
+<td>41779.439594</td>
+<td>-1.435601e+06</td>
+<td>2018-07-25T04:04:39Z</td>
+<td>41841.203272</td>
+<td>-1.435635e+06</td>
+<td>61.763677</td>
+<td>-34.322938</td>
+<td>-0.507220</td>
+<td>2.781049</td>
+<td>1.006111</td>
+<td>3.066667</td>
+<td>206.0</td>
+<td>0.719340</td>
+<td>0.694658</td>
+<td>-0.391358</td>
+<td>-0.920239</td>
+</tr>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">4</th>
+<td>2005</td>
+<td>2018-07-25T04:04:39Z</td>
+<td>41841.203272</td>
+<td>-1.435635e+06</td>
+<td>2018-07-25T05:04:27Z</td>
+<td>41655.463332</td>
+<td>-1.435604e+06</td>
+<td>-185.739939</td>
+<td>31.003534</td>
+<td>2.976198</td>
+<td>-0.507220</td>
+<td>0.996667</td>
+<td>4.066667</td>
+<td>206.0</td>
+<td>0.874620</td>
+<td>0.484810</td>
+<td>-0.391358</td>
+<td>-0.920239</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<div id="cell-10" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.651896Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.651839Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.654756Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.654429Z&quot;}}" data-execution_count="7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Model configuration</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="co"># 4 scalar covariates broadcast into spatial maps (no dt_hour so simulate() matches)</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>SCALAR_COLS <span class="op">=</span> [<span class="st">"hour_t1_sin1"</span>, <span class="st">"hour_t1_cos1"</span>, <span class="st">"yday_t1_sin1"</span>, <span class="st">"yday_t1_cos1"</span>, <span class="st">"dt_hour"</span>]</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>WINDOW_SIZE <span class="op">=</span> <span class="dv">101</span>    <span class="co"># small for speed; 101 is typical for production</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>PIXEL_SIZE  <span class="op">=</span> <span class="dv">25</span>    <span class="co"># raster resolution in metres (CRS units)</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>BATCH_SIZE  <span class="op">=</span> <span class="dv">32</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Calculate the flat size of the movement CNN output after 3× conv+maxpool</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>OUTPUT_CHANNELS <span class="op">=</span> <span class="dv">4</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>dim <span class="op">=</span> WINDOW_SIZE</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> _ <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">3</span>):</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    dim <span class="op">=</span> math.floor((dim <span class="op">+</span> <span class="dv">2</span> <span class="op">*</span> <span class="dv">1</span> <span class="op">-</span> <span class="dv">3</span>) <span class="op">/</span> <span class="dv">1</span> <span class="op">+</span> <span class="dv">1</span>)  <span class="co"># conv: pad=1 keeps dim</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    dim <span class="op">=</span> math.floor((dim <span class="op">-</span> <span class="dv">2</span>) <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> <span class="dv">1</span>)           <span class="co"># maxpool k=2, s=2</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>DENSE_DIM <span class="op">=</span> OUTPUT_CHANNELS <span class="op">*</span> dim <span class="op">*</span> dim</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"After 3× conv+maxpool: dim=</span><span class="sc">{</span>dim<span class="sc">}</span><span class="ss">  →  dense_dim_in_all=</span><span class="sc">{</span>DENSE_DIM<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a><span class="co"># Drop steps whose displacement exceeds the window; would cause an index error in the loss</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>step_df <span class="op">=</span> filter_steps_by_window(step_df, window_size<span class="op">=</span>WINDOW_SIZE, pixel_size<span class="op">=</span>PIXEL_SIZE)</span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Steps after window filter: </span><span class="sc">{</span><span class="bu">len</span>(step_df)<span class="sc">:,}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>After 3× conv+maxpool: dim=12  →  dense_dim_in_all=576
+Steps after window filter: 10,101</code></pre>
+</div>
+</div>
+<div id="cell-11" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.655763Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.655705Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.795800Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.795466Z&quot;}}" data-execution_count="8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>dl_train, dl_val, dl_test <span class="op">=</span> make_dataloaders(</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    layer_paths<span class="op">=</span>LAYER_PATHS,</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    window_size<span class="op">=</span>WINDOW_SIZE,</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>    batch_size<span class="op">=</span>BATCH_SIZE,</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    train_split<span class="op">=</span><span class="fl">0.8</span>,</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    val_split<span class="op">=</span><span class="fl">0.1</span>,</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    scalar_cols<span class="op">=</span>SCALAR_COLS,</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    df<span class="op">=</span>step_df,</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Train batches : </span><span class="sc">{</span><span class="bu">len</span>(dl_train)<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Val   batches : </span><span class="sc">{</span><span class="bu">len</span>(dl_val)<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Test  batches : </span><span class="sc">{</span><span class="bu">len</span>(dl_test)<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Layer 'ndvi': min=-0.06614641100168228, max=0.731696367263794 → scaled to [0, 1]
+Layer 'slope': min=0.00013558653881773353, max=12.298083305358887 → scaled to [0, 1]
+Train batches : 253
+Val   batches : 32
+Test  batches : 32</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>/Users/scottforrest/Library/Mobile Documents/com~apple~CloudDocs/github_repos/deepSSF_package/src/deepssf/data.py:358: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /Users/runner/work/pytorch/pytorch/torch/csrc/utils/tensor_numpy.cpp:219.)
+  self.scalar_to_grid_data = torch.from_numpy(</code></pre>
+</div>
+</div>
+<div id="cell-12" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.796821Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.796758Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.799707Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.799360Z&quot;}}" data-execution_count="9">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Inspect one batch</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>x1, x2, x3, (px2, py2), _ <span class="op">=</span> <span class="bu">next</span>(<span class="bu">iter</span>(dl_train))</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Spatial   x1 : </span><span class="sc">{</span>x1<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">   (batch × channels × H × W)"</span>)</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Scalars   x2 : </span><span class="sc">{</span>x2<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Bearing   x3 : </span><span class="sc">{</span>x3<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Next-step px2: </span><span class="sc">{</span>px2[:<span class="dv">4</span>]<span class="sc">.</span>tolist()<span class="sc">}</span><span class="ss">  py2: </span><span class="sc">{</span>py2[:<span class="dv">4</span>]<span class="sc">.</span>tolist()<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Spatial   x1 : torch.Size([32, 2, 101, 101])   (batch × channels × H × W)
+Scalars   x2 : torch.Size([32, 5])
+Bearing   x3 : torch.Size([32, 1])
+Next-step px2: [54, 51, 50, 50]  py2: [51, 53, 50, 50]</code></pre>
+</div>
+</div>
+</section>
+<section id="train-model" class="level2">
+<h2 class="anchored" data-anchor-id="train-model">3 Train model</h2>
+<div id="cell-14" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.800689Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.800628Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:38.812868Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:38.812581Z&quot;}}" data-execution_count="10">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>params <span class="op">=</span> ModelParams({</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"batch_size"</span>:                BATCH_SIZE,</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"image_dim"</span>:                 WINDOW_SIZE,</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"pixel_size"</span>:                PIXEL_SIZE,</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dim_in_nonspatial_to_grid"</span>: <span class="bu">len</span>(SCALAR_COLS),</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dense_dim_in_nonspatial"</span>:   <span class="bu">len</span>(SCALAR_COLS),</span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dense_dim_hidden"</span>:          <span class="dv">64</span>,</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dense_dim_in_all"</span>:          DENSE_DIM,</span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    <span class="st">"input_channels"</span>:            <span class="dv">2</span> <span class="op">+</span> <span class="bu">len</span>(SCALAR_COLS),  <span class="co"># 2 spatial + 4 scalar-to-grid</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>    <span class="st">"output_channels"</span>:           OUTPUT_CHANNELS,</span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>    <span class="st">"kernel_size"</span>:               <span class="dv">3</span>,</span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>    <span class="st">"stride"</span>:                    <span class="dv">1</span>,</span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>    <span class="st">"kernel_size_mp"</span>:            <span class="dv">2</span>,</span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>    <span class="st">"stride_mp"</span>:                 <span class="dv">2</span>,</span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>    <span class="st">"padding"</span>:                   <span class="dv">1</span>,</span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>    <span class="st">"num_movement_params"</span>:       <span class="dv">12</span>,</span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dropout"</span>:                   <span class="fl">0.0</span>,</span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>    <span class="st">"device"</span>:                    DEVICE,</span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>model <span class="op">=</span> ConvJointModel(params).to(DEVICE)</span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>n_params <span class="op">=</span> <span class="bu">sum</span>(p.numel() <span class="cf">for</span> p <span class="kw">in</span> model.parameters())</span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Model parameters : </span><span class="sc">{</span>n_params<span class="sc">:,}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Model parameters : 43,009</code></pre>
+</div>
+</div>
+<div id="cell-15" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:38.814020Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:38.813967Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:39.284040Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:39.283558Z&quot;}}" data-execution_count="11">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>loss_fn     <span class="op">=</span> negativeLogLikeLoss(reduction<span class="op">=</span><span class="st">"mean"</span>)</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>optimisers, schedulers <span class="op">=</span> make_optimisers(</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    model, lr_habitat<span class="op">=</span><span class="fl">1e-4</span>, lr_movement<span class="op">=</span><span class="fl">1e-5</span>, scheduler_patience<span class="op">=</span><span class="dv">2</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>early_stop  <span class="op">=</span> EarlyStopping(</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    patience<span class="op">=</span><span class="dv">5</span>, verbose<span class="op">=</span><span class="va">True</span>, path<span class="op">=</span><span class="bu">str</span>(OUTPUT_DIR <span class="op">/</span> <span class="st">"best_model.pt"</span>)</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<div id="cell-16" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:39.285537Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:39.285429Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:50.781785Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:50.781333Z&quot;}}" data-execution_count="13">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>history <span class="op">=</span> fit(</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span>model,</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    n_conv_layers<span class="op">=</span><span class="dv">4</span>, <span class="co"># how many convolutional layers in the habitat selection process (to filter edge artifacts that affect colour scaling)</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    window_size<span class="op">=</span>WINDOW_SIZE,</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    dl_train<span class="op">=</span>dl_train,</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    dl_val<span class="op">=</span>dl_val,</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>    loss_fn<span class="op">=</span>loss_fn,</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>    optimisers<span class="op">=</span>optimisers,</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    schedulers<span class="op">=</span>schedulers,</span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    n_epochs<span class="op">=</span><span class="dv">50</span>,</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    early_stopping<span class="op">=</span>early_stop,</span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>    snapshot_dir<span class="op">=</span><span class="bu">str</span>(SNAPSHOT_DIR),</span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>    snapshot_item<span class="op">=</span><span class="dv">500</span>,</span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+Epoch 1/50
+loss:        6.785439  [   32/ 8081]
+loss:        6.097230  [  352/ 8081]
+loss:        5.551458  [  672/ 8081]
+loss:        5.073307  [  992/ 8081]
+loss:        6.436917  [ 1312/ 8081]
+loss:        6.255669  [ 1632/ 8081]
+loss:        5.437774  [ 1952/ 8081]
+loss:        5.842318  [ 2272/ 8081]
+loss:        6.056246  [ 2592/ 8081]
+loss:        5.573969  [ 2912/ 8081]
+loss:        5.683355  [ 3232/ 8081]
+loss:        5.886904  [ 3552/ 8081]
+loss:        5.906250  [ 3872/ 8081]
+loss:        4.869259  [ 4192/ 8081]
+loss:        6.376064  [ 4512/ 8081]
+loss:        5.547744  [ 4832/ 8081]
+loss:        6.104920  [ 5152/ 8081]
+loss:        5.175964  [ 5472/ 8081]
+loss:        6.325367  [ 5792/ 8081]
+loss:        5.473641  [ 6112/ 8081]
+loss:        4.946332  [ 6432/ 8081]
+loss:        5.967487  [ 6752/ 8081]
+loss:        5.914863  [ 7072/ 8081]
+loss:        5.850795  [ 7392/ 8081]
+loss:        5.686168  [ 7712/ 8081]
+loss:        5.253773  [ 8032/ 8081]
+
+Avg training loss:        5.788497
+Val loss: 5.687180  (hab: 9.166112, mov: 5.704777)
+Validation loss decreased (5.708087 → 5.687180). Saving model…
+
+Epoch 2/50
+loss:        5.694406  [   32/ 8081]
+loss:        6.153904  [  352/ 8081]
+loss:        6.037060  [  672/ 8081]
+loss:        6.598245  [  992/ 8081]
+loss:        4.828341  [ 1312/ 8081]
+loss:        5.693692  [ 1632/ 8081]
+loss:        4.467628  [ 1952/ 8081]
+loss:        6.476704  [ 2272/ 8081]
+loss:        5.603591  [ 2592/ 8081]
+loss:        5.886862  [ 2912/ 8081]
+loss:        5.528289  [ 3232/ 8081]
+loss:        5.574023  [ 3552/ 8081]
+loss:        6.055640  [ 3872/ 8081]
+loss:        6.516983  [ 4192/ 8081]
+loss:        6.326391  [ 4512/ 8081]
+loss:        4.843784  [ 4832/ 8081]
+loss:        6.195689  [ 5152/ 8081]
+loss:        5.668516  [ 5472/ 8081]
+loss:        5.597651  [ 5792/ 8081]
+loss:        4.522491  [ 6112/ 8081]
+loss:        6.149788  [ 6432/ 8081]
+loss:        5.482637  [ 6752/ 8081]
+loss:        6.251376  [ 7072/ 8081]
+loss:        4.979764  [ 7392/ 8081]
+loss:        5.590664  [ 7712/ 8081]
+loss:        6.732779  [ 8032/ 8081]
+
+Avg training loss:        5.780206
+Val loss: 5.680278  (hab: 9.167198, mov: 5.698563)
+Validation loss decreased (5.687180 → 5.680278). Saving model…
+
+Epoch 3/50
+loss:        5.771159  [   32/ 8081]
+loss:        4.998755  [  352/ 8081]
+loss:        6.109458  [  672/ 8081]
+loss:        6.072502  [  992/ 8081]
+loss:        5.710176  [ 1312/ 8081]
+loss:        5.001541  [ 1632/ 8081]
+loss:        4.916896  [ 1952/ 8081]
+loss:        5.842347  [ 2272/ 8081]
+loss:        6.470130  [ 2592/ 8081]
+loss:        5.437813  [ 2912/ 8081]
+loss:        5.558701  [ 3232/ 8081]
+loss:        5.935304  [ 3552/ 8081]
+loss:        5.704793  [ 3872/ 8081]
+loss:        7.646010  [ 4192/ 8081]
+loss:        5.135283  [ 4512/ 8081]
+loss:        5.725735  [ 4832/ 8081]
+loss:        5.999853  [ 5152/ 8081]
+loss:        5.170563  [ 5472/ 8081]
+loss:        6.050817  [ 5792/ 8081]
+loss:        5.566458  [ 6112/ 8081]
+loss:        6.288377  [ 6432/ 8081]
+loss:        5.568368  [ 6752/ 8081]
+loss:        6.243468  [ 7072/ 8081]
+loss:        5.513037  [ 7392/ 8081]
+loss:        5.912124  [ 7712/ 8081]
+loss:        5.924772  [ 8032/ 8081]
+
+Avg training loss:        5.773384
+Val loss: 5.673004  (hab: 9.161399, mov: 5.693920)
+Validation loss decreased (5.680278 → 5.673004). Saving model…
+
+Epoch 4/50
+loss:        5.164478  [   32/ 8081]
+loss:        5.978908  [  352/ 8081]
+loss:        6.380840  [  672/ 8081]
+loss:        5.990369  [  992/ 8081]
+loss:        4.989443  [ 1312/ 8081]
+loss:        6.138777  [ 1632/ 8081]
+loss:        5.724806  [ 1952/ 8081]
+loss:        5.964715  [ 2272/ 8081]
+loss:        5.613798  [ 2592/ 8081]
+loss:        5.038851  [ 2912/ 8081]
+loss:        5.382350  [ 3232/ 8081]
+loss:        6.172091  [ 3552/ 8081]
+loss:        6.201478  [ 3872/ 8081]
+loss:        6.695495  [ 4192/ 8081]
+loss:        6.798589  [ 4512/ 8081]
+loss:        6.260759  [ 4832/ 8081]
+loss:        5.514187  [ 5152/ 8081]
+loss:        5.574938  [ 5472/ 8081]
+loss:        5.461888  [ 5792/ 8081]
+loss:        5.341826  [ 6112/ 8081]
+loss:        5.825900  [ 6432/ 8081]
+loss:        5.031033  [ 6752/ 8081]
+loss:        5.472840  [ 7072/ 8081]
+loss:        6.054863  [ 7392/ 8081]
+loss:        5.984641  [ 7712/ 8081]
+loss:        5.449839  [ 8032/ 8081]
+
+Avg training loss:        5.771757
+Val loss: 5.670019  (hab: 9.161964, mov: 5.690092)
+Validation loss decreased (5.673004 → 5.670019). Saving model…
+
+Epoch 5/50
+loss:        5.468553  [   32/ 8081]
+loss:        5.154895  [  352/ 8081]
+loss:        5.961631  [  672/ 8081]
+loss:        5.888359  [  992/ 8081]
+loss:        6.175714  [ 1312/ 8081]
+loss:        6.281458  [ 1632/ 8081]
+loss:        6.169101  [ 1952/ 8081]
+loss:        6.215828  [ 2272/ 8081]
+loss:        5.834133  [ 2592/ 8081]
+loss:        5.974036  [ 2912/ 8081]
+loss:        5.318532  [ 3232/ 8081]
+loss:        5.839583  [ 3552/ 8081]
+loss:        5.984657  [ 3872/ 8081]
+loss:        6.032445  [ 4192/ 8081]
+loss:        5.217687  [ 4512/ 8081]
+loss:        5.736081  [ 4832/ 8081]
+loss:        6.185085  [ 5152/ 8081]
+loss:        6.298941  [ 5472/ 8081]
+loss:        5.976015  [ 5792/ 8081]
+loss:        6.169477  [ 6112/ 8081]
+loss:        6.504289  [ 6432/ 8081]
+loss:        5.326622  [ 6752/ 8081]
+loss:        6.042302  [ 7072/ 8081]
+loss:        5.940510  [ 7392/ 8081]
+loss:        5.981143  [ 7712/ 8081]
+loss:        6.376686  [ 8032/ 8081]
+
+Avg training loss:        5.765343
+Val loss: 5.667132  (hab: 9.160795, mov: 5.687070)
+Validation loss decreased (5.670019 → 5.667132). Saving model…
+
+Epoch 6/50
+loss:        5.989162  [   32/ 8081]
+loss:        5.185757  [  352/ 8081]
+loss:        6.094879  [  672/ 8081]
+loss:        6.327469  [  992/ 8081]
+loss:        6.278698  [ 1312/ 8081]
+loss:        7.185611  [ 1632/ 8081]
+loss:        6.149991  [ 1952/ 8081]
+loss:        6.799704  [ 2272/ 8081]
+loss:        5.566303  [ 2592/ 8081]
+loss:        5.896247  [ 2912/ 8081]
+loss:        6.005388  [ 3232/ 8081]
+loss:        5.651654  [ 3552/ 8081]
+loss:        6.483175  [ 3872/ 8081]
+loss:        5.532136  [ 4192/ 8081]
+loss:        6.001493  [ 4512/ 8081]
+loss:        6.396995  [ 4832/ 8081]
+loss:        6.277179  [ 5152/ 8081]
+loss:        5.335245  [ 5472/ 8081]
+loss:        5.850138  [ 5792/ 8081]
+loss:        5.985559  [ 6112/ 8081]
+loss:        5.363245  [ 6432/ 8081]
+loss:        5.474362  [ 6752/ 8081]
+loss:        6.610009  [ 7072/ 8081]
+loss:        4.994096  [ 7392/ 8081]
+loss:        6.311173  [ 7712/ 8081]
+loss:        5.433157  [ 8032/ 8081]
+
+Avg training loss:        5.762437
+Val loss: 5.664561  (hab: 9.163505, mov: 5.684692)
+Validation loss decreased (5.667132 → 5.664561). Saving model…
+
+Epoch 7/50
+loss:        5.466299  [   32/ 8081]
+loss:        5.562140  [  352/ 8081]
+loss:        5.990706  [  672/ 8081]
+loss:        6.745186  [  992/ 8081]
+loss:        5.897082  [ 1312/ 8081]
+loss:        6.342498  [ 1632/ 8081]
+loss:        6.487095  [ 1952/ 8081]
+loss:        5.308664  [ 2272/ 8081]
+loss:        6.215004  [ 2592/ 8081]
+loss:        5.250403  [ 2912/ 8081]
+loss:        5.854526  [ 3232/ 8081]
+loss:        5.654216  [ 3552/ 8081]
+loss:        5.539589  [ 3872/ 8081]
+loss:        5.537636  [ 4192/ 8081]
+loss:        5.496979  [ 4512/ 8081]
+loss:        5.635530  [ 4832/ 8081]
+loss:        4.809999  [ 5152/ 8081]
+loss:        5.620271  [ 5472/ 8081]
+loss:        6.103968  [ 5792/ 8081]
+loss:        6.340637  [ 6112/ 8081]
+loss:        6.328131  [ 6432/ 8081]
+loss:        5.185500  [ 6752/ 8081]
+loss:        5.044396  [ 7072/ 8081]
+loss:        6.326553  [ 7392/ 8081]
+loss:        5.725074  [ 7712/ 8081]
+loss:        5.338499  [ 8032/ 8081]
+
+Avg training loss:        5.757804
+Val loss: 5.663774  (hab: 9.160690, mov: 5.682512)
+Validation loss decreased (5.664561 → 5.663774). Saving model…
+
+Epoch 8/50
+loss:        5.153199  [   32/ 8081]
+loss:        6.033429  [  352/ 8081]
+loss:        6.188162  [  672/ 8081]
+loss:        5.682156  [  992/ 8081]
+loss:        5.402650  [ 1312/ 8081]
+loss:        6.339832  [ 1632/ 8081]
+loss:        5.566161  [ 1952/ 8081]
+loss:        5.892251  [ 2272/ 8081]
+loss:        4.953355  [ 2592/ 8081]
+loss:        5.078116  [ 2912/ 8081]
+loss:        5.694687  [ 3232/ 8081]
+loss:        6.260427  [ 3552/ 8081]
+loss:        5.378967  [ 3872/ 8081]
+loss:        5.724102  [ 4192/ 8081]
+loss:        6.579778  [ 4512/ 8081]
+loss:        6.327852  [ 4832/ 8081]
+loss:        5.288838  [ 5152/ 8081]
+loss:        5.571650  [ 5472/ 8081]
+loss:        7.053420  [ 5792/ 8081]
+loss:        6.272779  [ 6112/ 8081]
+loss:        5.462452  [ 6432/ 8081]
+loss:        5.919233  [ 6752/ 8081]
+loss:        6.486927  [ 7072/ 8081]
+loss:        5.169839  [ 7392/ 8081]
+loss:        5.864375  [ 7712/ 8081]
+loss:        6.144361  [ 8032/ 8081]
+
+Avg training loss:        5.756941
+Val loss: 5.659359  (hab: 9.160813, mov: 5.680856)
+Validation loss decreased (5.663774 → 5.659359). Saving model…
+
+Epoch 9/50
+loss:        5.015366  [   32/ 8081]
+loss:        5.890463  [  352/ 8081]
+loss:        5.667079  [  672/ 8081]
+loss:        6.308356  [  992/ 8081]
+loss:        6.460155  [ 1312/ 8081]
+loss:        5.740475  [ 1632/ 8081]
+loss:        6.436217  [ 1952/ 8081]
+loss:        7.255536  [ 2272/ 8081]
+loss:        5.891561  [ 2592/ 8081]
+loss:        5.757444  [ 2912/ 8081]
+loss:        6.140157  [ 3232/ 8081]
+loss:        5.553885  [ 3552/ 8081]
+loss:        5.180971  [ 3872/ 8081]
+loss:        5.593443  [ 4192/ 8081]
+loss:        5.231184  [ 4512/ 8081]
+loss:        5.650258  [ 4832/ 8081]
+loss:        5.901844  [ 5152/ 8081]
+loss:        5.418355  [ 5472/ 8081]
+loss:        6.061893  [ 5792/ 8081]
+loss:        5.725675  [ 6112/ 8081]
+loss:        5.522688  [ 6432/ 8081]
+loss:        5.422935  [ 6752/ 8081]
+loss:        5.901719  [ 7072/ 8081]
+loss:        6.634830  [ 7392/ 8081]
+loss:        6.179843  [ 7712/ 8081]
+loss:        6.570165  [ 8032/ 8081]
+
+Avg training loss:        5.753735
+Val loss: 5.657118  (hab: 9.155861, mov: 5.679439)
+Validation loss decreased (5.659359 → 5.657118). Saving model…
+
+Epoch 10/50
+loss:        5.979346  [   32/ 8081]
+loss:        6.341550  [  352/ 8081]
+loss:        6.134659  [  672/ 8081]
+loss:        5.003821  [  992/ 8081]
+loss:        5.825746  [ 1312/ 8081]
+loss:        6.957564  [ 1632/ 8081]
+loss:        5.609220  [ 1952/ 8081]
+loss:        5.420880  [ 2272/ 8081]
+loss:        5.825545  [ 2592/ 8081]
+loss:        6.414145  [ 2912/ 8081]
+loss:        4.970078  [ 3232/ 8081]
+loss:        4.309336  [ 3552/ 8081]
+loss:        6.106659  [ 3872/ 8081]
+loss:        6.817013  [ 4192/ 8081]
+loss:        5.473575  [ 4512/ 8081]
+loss:        5.892172  [ 4832/ 8081]
+loss:        6.330991  [ 5152/ 8081]
+loss:        4.686843  [ 5472/ 8081]
+loss:        6.179124  [ 5792/ 8081]
+loss:        5.744292  [ 6112/ 8081]
+loss:        5.377276  [ 6432/ 8081]
+loss:        5.348831  [ 6752/ 8081]
+loss:        5.073267  [ 7072/ 8081]
+loss:        4.481338  [ 7392/ 8081]
+loss:        5.835503  [ 7712/ 8081]
+loss:        4.866236  [ 8032/ 8081]
+
+Avg training loss:        5.750079
+Val loss: 5.655317  (hab: 9.154174, mov: 5.678362)
+Validation loss decreased (5.657118 → 5.655317). Saving model…
+
+Epoch 11/50
+loss:        5.954041  [   32/ 8081]
+loss:        6.094968  [  352/ 8081]
+loss:        4.979434  [  672/ 8081]
+loss:        5.557578  [  992/ 8081]
+loss:        6.135086  [ 1312/ 8081]
+loss:        6.096596  [ 1632/ 8081]
+loss:        5.810320  [ 1952/ 8081]
+loss:        5.773321  [ 2272/ 8081]
+loss:        5.708895  [ 2592/ 8081]
+loss:        5.832764  [ 2912/ 8081]
+loss:        5.584544  [ 3232/ 8081]
+loss:        5.994350  [ 3552/ 8081]
+loss:        6.183756  [ 3872/ 8081]
+loss:        7.011960  [ 4192/ 8081]
+loss:        5.242159  [ 4512/ 8081]
+loss:        4.903460  [ 4832/ 8081]
+loss:        5.612700  [ 5152/ 8081]
+loss:        6.321691  [ 5472/ 8081]
+loss:        6.183264  [ 5792/ 8081]
+loss:        6.033978  [ 6112/ 8081]
+loss:        5.172969  [ 6432/ 8081]
+loss:        6.431845  [ 6752/ 8081]
+loss:        5.793088  [ 7072/ 8081]
+loss:        4.720260  [ 7392/ 8081]
+loss:        4.866962  [ 7712/ 8081]
+loss:        6.244982  [ 8032/ 8081]
+
+Avg training loss:        5.750686
+Val loss: 5.653751  (hab: 9.154543, mov: 5.677163)
+Validation loss decreased (5.655317 → 5.653751). Saving model…
+
+Epoch 12/50
+loss:        6.128786  [   32/ 8081]
+loss:        6.231214  [  352/ 8081]
+loss:        5.599900  [  672/ 8081]
+loss:        5.946187  [  992/ 8081]
+loss:        6.217439  [ 1312/ 8081]
+loss:        5.561559  [ 1632/ 8081]
+loss:        6.017690  [ 1952/ 8081]
+loss:        6.422792  [ 2272/ 8081]
+loss:        5.169445  [ 2592/ 8081]
+loss:        5.734517  [ 2912/ 8081]
+loss:        6.159955  [ 3232/ 8081]
+loss:        6.048131  [ 3552/ 8081]
+loss:        5.095168  [ 3872/ 8081]
+loss:        5.633101  [ 4192/ 8081]
+loss:        5.936021  [ 4512/ 8081]
+loss:        4.978602  [ 4832/ 8081]
+loss:        6.078108  [ 5152/ 8081]
+loss:        6.416469  [ 5472/ 8081]
+loss:        6.084074  [ 5792/ 8081]
+loss:        7.058030  [ 6112/ 8081]
+loss:        6.218597  [ 6432/ 8081]
+loss:        5.706355  [ 6752/ 8081]
+loss:        6.205107  [ 7072/ 8081]
+loss:        6.251582  [ 7392/ 8081]
+loss:        6.318515  [ 7712/ 8081]
+loss:        5.446843  [ 8032/ 8081]
+
+Avg training loss:        5.747251
+Val loss: 5.651318  (hab: 9.156074, mov: 5.676356)
+Validation loss decreased (5.653751 → 5.651318). Saving model…
+
+Epoch 13/50
+loss:        5.735549  [   32/ 8081]
+loss:        5.167077  [  352/ 8081]
+loss:        5.022010  [  672/ 8081]
+loss:        6.689678  [  992/ 8081]
+loss:        5.273829  [ 1312/ 8081]
+loss:        5.824816  [ 1632/ 8081]
+loss:        5.750481  [ 1952/ 8081]
+loss:        5.760807  [ 2272/ 8081]
+loss:        4.784536  [ 2592/ 8081]
+loss:        7.326108  [ 2912/ 8081]
+loss:        6.325606  [ 3232/ 8081]
+loss:        5.315575  [ 3552/ 8081]
+loss:        5.708946  [ 3872/ 8081]
+loss:        6.236599  [ 4192/ 8081]
+loss:        6.176717  [ 4512/ 8081]
+loss:        6.667757  [ 4832/ 8081]
+loss:        4.588668  [ 5152/ 8081]
+loss:        5.248083  [ 5472/ 8081]
+loss:        6.057298  [ 5792/ 8081]
+loss:        5.856156  [ 6112/ 8081]
+loss:        6.274911  [ 6432/ 8081]
+loss:        6.290979  [ 6752/ 8081]
+loss:        5.460048  [ 7072/ 8081]
+loss:        4.758325  [ 7392/ 8081]
+loss:        7.212662  [ 7712/ 8081]
+loss:        6.885795  [ 8032/ 8081]
+
+Avg training loss:        5.746758
+Val loss: 5.648002  (hab: 9.150894, mov: 5.675554)
+Validation loss decreased (5.651318 → 5.648002). Saving model…
+
+Epoch 14/50
+loss:        5.946347  [   32/ 8081]
+loss:        5.041623  [  352/ 8081]
+loss:        5.873816  [  672/ 8081]
+loss:        5.291799  [  992/ 8081]
+loss:        5.365646  [ 1312/ 8081]
+loss:        5.800356  [ 1632/ 8081]
+loss:        5.706845  [ 1952/ 8081]
+loss:        6.113334  [ 2272/ 8081]
+loss:        5.965096  [ 2592/ 8081]
+loss:        6.214636  [ 2912/ 8081]
+loss:        6.481359  [ 3232/ 8081]
+loss:        4.853850  [ 3552/ 8081]
+loss:        5.281315  [ 3872/ 8081]
+loss:        5.762989  [ 4192/ 8081]
+loss:        6.134844  [ 4512/ 8081]
+loss:        6.813313  [ 4832/ 8081]
+loss:        6.060571  [ 5152/ 8081]
+loss:        7.026179  [ 5472/ 8081]
+loss:        5.946495  [ 5792/ 8081]
+loss:        5.180030  [ 6112/ 8081]
+loss:        6.355926  [ 6432/ 8081]
+loss:        5.490451  [ 6752/ 8081]
+loss:        5.836087  [ 7072/ 8081]
+loss:        6.027002  [ 7392/ 8081]
+loss:        5.614779  [ 7712/ 8081]
+loss:        6.035224  [ 8032/ 8081]
+
+Avg training loss:        5.742599
+Val loss: 5.648140  (hab: 9.153320, mov: 5.674904)
+EarlyStopping counter: 1 out of 5
+
+Epoch 15/50
+loss:        5.597585  [   32/ 8081]
+loss:        4.928980  [  352/ 8081]
+loss:        5.134027  [  672/ 8081]
+loss:        5.157074  [  992/ 8081]
+loss:        5.909005  [ 1312/ 8081]
+loss:        5.560033  [ 1632/ 8081]
+loss:        6.205202  [ 1952/ 8081]
+loss:        6.106179  [ 2272/ 8081]
+loss:        7.436422  [ 2592/ 8081]
+loss:        5.639592  [ 2912/ 8081]
+loss:        4.822022  [ 3232/ 8081]
+loss:        4.106799  [ 3552/ 8081]
+loss:        6.259495  [ 3872/ 8081]
+loss:        7.228454  [ 4192/ 8081]
+loss:        5.105317  [ 4512/ 8081]
+loss:        5.871928  [ 4832/ 8081]
+loss:        5.165004  [ 5152/ 8081]
+loss:        6.482831  [ 5472/ 8081]
+loss:        4.902627  [ 5792/ 8081]
+loss:        6.007688  [ 6112/ 8081]
+loss:        4.781419  [ 6432/ 8081]
+loss:        5.254600  [ 6752/ 8081]
+loss:        6.425246  [ 7072/ 8081]
+loss:        6.281509  [ 7392/ 8081]
+loss:        5.598694  [ 7712/ 8081]
+loss:        6.053635  [ 8032/ 8081]
+
+Avg training loss:        5.743073
+Val loss: 5.645316  (hab: 9.148739, mov: 5.674267)
+Validation loss decreased (5.648002 → 5.645316). Saving model…
+
+Epoch 16/50
+loss:        6.885323  [   32/ 8081]
+loss:        5.594497  [  352/ 8081]
+loss:        5.678989  [  672/ 8081]
+loss:        6.227365  [  992/ 8081]
+loss:        5.790132  [ 1312/ 8081]
+loss:        5.360517  [ 1632/ 8081]
+loss:        5.787529  [ 1952/ 8081]
+loss:        6.439590  [ 2272/ 8081]
+loss:        5.170119  [ 2592/ 8081]
+loss:        5.598507  [ 2912/ 8081]
+loss:        5.916703  [ 3232/ 8081]
+loss:        5.602601  [ 3552/ 8081]
+loss:        4.940242  [ 3872/ 8081]
+loss:        5.859461  [ 4192/ 8081]
+loss:        5.760822  [ 4512/ 8081]
+loss:        5.442616  [ 4832/ 8081]
+loss:        5.790349  [ 5152/ 8081]
+loss:        5.874994  [ 5472/ 8081]
+loss:        5.619014  [ 5792/ 8081]
+loss:        5.000046  [ 6112/ 8081]
+loss:        5.243309  [ 6432/ 8081]
+loss:        6.288419  [ 6752/ 8081]
+loss:        6.087790  [ 7072/ 8081]
+loss:        6.147535  [ 7392/ 8081]
+loss:        6.012441  [ 7712/ 8081]
+loss:        6.748470  [ 8032/ 8081]
+
+Avg training loss:        5.742579
+Val loss: 5.644631  (hab: 9.147775, mov: 5.673745)
+Validation loss decreased (5.645316 → 5.644631). Saving model…
+
+Epoch 17/50
+loss:        6.283003  [   32/ 8081]
+loss:        5.595797  [  352/ 8081]
+loss:        5.715901  [  672/ 8081]
+loss:        5.501903  [  992/ 8081]
+loss:        5.439520  [ 1312/ 8081]
+loss:        4.297513  [ 1632/ 8081]
+loss:        5.481026  [ 1952/ 8081]
+loss:        5.943962  [ 2272/ 8081]
+loss:        5.792973  [ 2592/ 8081]
+loss:        4.885669  [ 2912/ 8081]
+loss:        5.561083  [ 3232/ 8081]
+loss:        5.883833  [ 3552/ 8081]
+loss:        6.213400  [ 3872/ 8081]
+loss:        5.019048  [ 4192/ 8081]
+loss:        5.765052  [ 4512/ 8081]
+loss:        4.955160  [ 4832/ 8081]
+loss:        5.329431  [ 5152/ 8081]
+loss:        5.798806  [ 5472/ 8081]
+loss:        5.645044  [ 5792/ 8081]
+loss:        6.268931  [ 6112/ 8081]
+loss:        5.830894  [ 6432/ 8081]
+loss:        6.479350  [ 6752/ 8081]
+loss:        5.524815  [ 7072/ 8081]
+loss:        4.875284  [ 7392/ 8081]
+loss:        6.527176  [ 7712/ 8081]
+loss:        6.552918  [ 8032/ 8081]
+
+Avg training loss:        5.741385
+Val loss: 5.643943  (hab: 9.149630, mov: 5.673379)
+Validation loss decreased (5.644631 → 5.643943). Saving model…
+
+Epoch 18/50
+loss:        5.646639  [   32/ 8081]
+loss:        6.221776  [  352/ 8081]
+loss:        5.486329  [  672/ 8081]
+loss:        6.544412  [  992/ 8081]
+loss:        5.341964  [ 1312/ 8081]
+loss:        5.519305  [ 1632/ 8081]
+loss:        5.982452  [ 1952/ 8081]
+loss:        6.139508  [ 2272/ 8081]
+loss:        5.064729  [ 2592/ 8081]
+loss:        6.249910  [ 2912/ 8081]
+loss:        5.974421  [ 3232/ 8081]
+loss:        5.339847  [ 3552/ 8081]
+loss:        6.463853  [ 3872/ 8081]
+loss:        6.058188  [ 4192/ 8081]
+loss:        5.772356  [ 4512/ 8081]
+loss:        6.047544  [ 4832/ 8081]
+loss:        6.791408  [ 5152/ 8081]
+loss:        4.642981  [ 5472/ 8081]
+loss:        5.114915  [ 5792/ 8081]
+loss:        6.150812  [ 6112/ 8081]
+loss:        6.051000  [ 6432/ 8081]
+loss:        6.648256  [ 6752/ 8081]
+loss:        6.250250  [ 7072/ 8081]
+loss:        5.238799  [ 7392/ 8081]
+loss:        5.869842  [ 7712/ 8081]
+loss:        6.773789  [ 8032/ 8081]
+
+Avg training loss:        5.740270
+Val loss: 5.644076  (hab: 9.149081, mov: 5.672949)
+EarlyStopping counter: 1 out of 5
+
+Epoch 19/50
+loss:        5.175504  [   32/ 8081]
+loss:        6.612113  [  352/ 8081]
+loss:        6.259410  [  672/ 8081]
+loss:        6.931705  [  992/ 8081]
+loss:        6.386226  [ 1312/ 8081]
+loss:        5.127598  [ 1632/ 8081]
+loss:        5.744873  [ 1952/ 8081]
+loss:        5.399240  [ 2272/ 8081]
+loss:        6.128780  [ 2592/ 8081]
+loss:        4.790784  [ 2912/ 8081]
+loss:        6.567341  [ 3232/ 8081]
+loss:        4.790431  [ 3552/ 8081]
+loss:        5.470789  [ 3872/ 8081]
+loss:        5.554800  [ 4192/ 8081]
+loss:        5.679316  [ 4512/ 8081]
+loss:        5.368668  [ 4832/ 8081]
+loss:        5.470472  [ 5152/ 8081]
+loss:        5.754320  [ 5472/ 8081]
+loss:        5.034759  [ 5792/ 8081]
+loss:        6.242113  [ 6112/ 8081]
+loss:        5.507895  [ 6432/ 8081]
+loss:        5.377802  [ 6752/ 8081]
+loss:        5.432044  [ 7072/ 8081]
+loss:        7.036860  [ 7392/ 8081]
+loss:        5.353534  [ 7712/ 8081]
+loss:        5.177495  [ 8032/ 8081]
+
+Avg training loss:        5.737458
+Val loss: 5.644072  (hab: 9.149584, mov: 5.672635)
+EarlyStopping counter: 2 out of 5
+
+Epoch 20/50
+loss:        5.072841  [   32/ 8081]
+loss:        5.977276  [  352/ 8081]
+loss:        6.188596  [  672/ 8081]
+loss:        5.472806  [  992/ 8081]
+loss:        5.054672  [ 1312/ 8081]
+loss:        6.003091  [ 1632/ 8081]
+loss:        5.515766  [ 1952/ 8081]
+loss:        7.272111  [ 2272/ 8081]
+loss:        5.377561  [ 2592/ 8081]
+loss:        5.953638  [ 2912/ 8081]
+loss:        5.927915  [ 3232/ 8081]
+loss:        6.455359  [ 3552/ 8081]
+loss:        6.164033  [ 3872/ 8081]
+loss:        6.237619  [ 4192/ 8081]
+loss:        6.076998  [ 4512/ 8081]
+loss:        6.516166  [ 4832/ 8081]
+loss:        5.407486  [ 5152/ 8081]
+loss:        4.519997  [ 5472/ 8081]
+loss:        6.256764  [ 5792/ 8081]
+loss:        4.865379  [ 6112/ 8081]
+loss:        5.583294  [ 6432/ 8081]
+loss:        6.422597  [ 6752/ 8081]
+loss:        5.656250  [ 7072/ 8081]
+loss:        6.124544  [ 7392/ 8081]
+loss:        6.916223  [ 7712/ 8081]
+loss:        5.714869  [ 8032/ 8081]
+
+Avg training loss:        5.738087
+Val loss: 5.641866  (hab: 9.147915, mov: 5.672215)
+Validation loss decreased (5.643943 → 5.641866). Saving model…
+
+Epoch 21/50
+loss:        6.010686  [   32/ 8081]
+loss:        6.227398  [  352/ 8081]
+loss:        5.143725  [  672/ 8081]
+loss:        5.645541  [  992/ 8081]
+loss:        5.240898  [ 1312/ 8081]
+loss:        4.938787  [ 1632/ 8081]
+loss:        5.559191  [ 1952/ 8081]
+loss:        6.605025  [ 2272/ 8081]
+loss:        5.396750  [ 2592/ 8081]
+loss:        5.149271  [ 2912/ 8081]
+loss:        5.966692  [ 3232/ 8081]
+loss:        5.675520  [ 3552/ 8081]
+loss:        5.866745  [ 3872/ 8081]
+loss:        4.591894  [ 4192/ 8081]
+loss:        6.107647  [ 4512/ 8081]
+loss:        5.626565  [ 4832/ 8081]
+loss:        6.301752  [ 5152/ 8081]
+loss:        5.883070  [ 5472/ 8081]
+loss:        6.466449  [ 5792/ 8081]
+loss:        5.921516  [ 6112/ 8081]
+loss:        4.517435  [ 6432/ 8081]
+loss:        6.049242  [ 6752/ 8081]
+loss:        7.047176  [ 7072/ 8081]
+loss:        5.933296  [ 7392/ 8081]
+loss:        6.263047  [ 7712/ 8081]
+loss:        5.244785  [ 8032/ 8081]
+
+Avg training loss:        5.737740
+Val loss: 5.640463  (hab: 9.149177, mov: 5.671844)
+Validation loss decreased (5.641866 → 5.640463). Saving model…
+
+Epoch 22/50
+loss:        5.056785  [   32/ 8081]
+loss:        5.107917  [  352/ 8081]
+loss:        6.367042  [  672/ 8081]
+loss:        5.297422  [  992/ 8081]
+loss:        6.158465  [ 1312/ 8081]
+loss:        7.193504  [ 1632/ 8081]
+loss:        5.873117  [ 1952/ 8081]
+loss:        5.830358  [ 2272/ 8081]
+loss:        5.546278  [ 2592/ 8081]
+loss:        5.019753  [ 2912/ 8081]
+loss:        6.140012  [ 3232/ 8081]
+loss:        5.437500  [ 3552/ 8081]
+loss:        5.131791  [ 3872/ 8081]
+loss:        5.591730  [ 4192/ 8081]
+loss:        5.345333  [ 4512/ 8081]
+loss:        5.434434  [ 4832/ 8081]
+loss:        5.019072  [ 5152/ 8081]
+loss:        5.485474  [ 5472/ 8081]
+loss:        5.990477  [ 5792/ 8081]
+loss:        6.565684  [ 6112/ 8081]
+loss:        5.539105  [ 6432/ 8081]
+loss:        6.096859  [ 6752/ 8081]
+loss:        5.047228  [ 7072/ 8081]
+loss:        5.438942  [ 7392/ 8081]
+loss:        4.245893  [ 7712/ 8081]
+loss:        5.230383  [ 8032/ 8081]
+
+Avg training loss:        5.737169
+Val loss: 5.641476  (hab: 9.145061, mov: 5.671644)
+EarlyStopping counter: 1 out of 5
+
+Epoch 23/50
+loss:        6.373130  [   32/ 8081]
+loss:        5.521699  [  352/ 8081]
+loss:        5.814208  [  672/ 8081]
+loss:        5.395493  [  992/ 8081]
+loss:        5.824369  [ 1312/ 8081]
+loss:        6.002573  [ 1632/ 8081]
+loss:        5.864894  [ 1952/ 8081]
+loss:        6.124455  [ 2272/ 8081]
+loss:        6.624372  [ 2592/ 8081]
+loss:        5.793117  [ 2912/ 8081]
+loss:        6.165062  [ 3232/ 8081]
+loss:        6.720785  [ 3552/ 8081]
+loss:        6.139231  [ 3872/ 8081]
+loss:        5.599601  [ 4192/ 8081]
+loss:        5.711744  [ 4512/ 8081]
+loss:        5.504859  [ 4832/ 8081]
+loss:        5.548381  [ 5152/ 8081]
+loss:        6.631241  [ 5472/ 8081]
+loss:        6.187800  [ 5792/ 8081]
+loss:        5.437247  [ 6112/ 8081]
+loss:        5.561949  [ 6432/ 8081]
+loss:        5.568308  [ 6752/ 8081]
+loss:        4.743848  [ 7072/ 8081]
+loss:        4.785015  [ 7392/ 8081]
+loss:        5.890841  [ 7712/ 8081]
+loss:        5.016112  [ 8032/ 8081]
+
+Avg training loss:        5.738002
+Val loss: 5.641952  (hab: 9.144587, mov: 5.671266)
+EarlyStopping counter: 2 out of 5
+
+Epoch 24/50
+loss:        5.746219  [   32/ 8081]
+loss:        5.143204  [  352/ 8081]
+loss:        6.581674  [  672/ 8081]
+loss:        5.834509  [  992/ 8081]
+loss:        5.494139  [ 1312/ 8081]
+loss:        4.902992  [ 1632/ 8081]
+loss:        5.277520  [ 1952/ 8081]
+loss:        6.514735  [ 2272/ 8081]
+loss:        5.920425  [ 2592/ 8081]
+loss:        5.850049  [ 2912/ 8081]
+loss:        5.195207  [ 3232/ 8081]
+loss:        6.105504  [ 3552/ 8081]
+loss:        5.616876  [ 3872/ 8081]
+loss:        6.008060  [ 4192/ 8081]
+loss:        5.422901  [ 4512/ 8081]
+loss:        5.177522  [ 4832/ 8081]
+loss:        4.751125  [ 5152/ 8081]
+loss:        5.577045  [ 5472/ 8081]
+loss:        6.131419  [ 5792/ 8081]
+loss:        6.501829  [ 6112/ 8081]
+loss:        5.214920  [ 6432/ 8081]
+loss:        5.598885  [ 6752/ 8081]
+loss:        5.734118  [ 7072/ 8081]
+loss:        5.896174  [ 7392/ 8081]
+loss:        5.807665  [ 7712/ 8081]
+loss:        5.157558  [ 8032/ 8081]
+
+Avg training loss:        5.735473
+Val loss: 5.640158  (hab: 9.143460, mov: 5.671050)
+Validation loss decreased (5.640463 → 5.640158). Saving model…
+
+Epoch 25/50
+loss:        6.161477  [   32/ 8081]
+loss:        5.648900  [  352/ 8081]
+loss:        5.558351  [  672/ 8081]
+loss:        5.186936  [  992/ 8081]
+loss:        5.539708  [ 1312/ 8081]
+loss:        5.807642  [ 1632/ 8081]
+loss:        6.611417  [ 1952/ 8081]
+loss:        5.423437  [ 2272/ 8081]
+loss:        5.694284  [ 2592/ 8081]
+loss:        5.506063  [ 2912/ 8081]
+loss:        4.919890  [ 3232/ 8081]
+loss:        6.296585  [ 3552/ 8081]
+loss:        5.463380  [ 3872/ 8081]
+loss:        5.580927  [ 4192/ 8081]
+loss:        6.874486  [ 4512/ 8081]
+loss:        4.920260  [ 4832/ 8081]
+loss:        6.043089  [ 5152/ 8081]
+loss:        5.447857  [ 5472/ 8081]
+loss:        6.368416  [ 5792/ 8081]
+loss:        4.843377  [ 6112/ 8081]
+loss:        6.345890  [ 6432/ 8081]
+loss:        5.116454  [ 6752/ 8081]
+loss:        6.050868  [ 7072/ 8081]
+loss:        6.241920  [ 7392/ 8081]
+loss:        6.305410  [ 7712/ 8081]
+loss:        5.232047  [ 8032/ 8081]
+
+Avg training loss:        5.734663
+Val loss: 5.639725  (hab: 9.144361, mov: 5.670998)
+Validation loss decreased (5.640158 → 5.639725). Saving model…
+
+Epoch 26/50
+loss:        7.151555  [   32/ 8081]
+loss:        5.414118  [  352/ 8081]
+loss:        6.189126  [  672/ 8081]
+loss:        5.227577  [  992/ 8081]
+loss:        6.818292  [ 1312/ 8081]
+loss:        5.771779  [ 1632/ 8081]
+loss:        5.577074  [ 1952/ 8081]
+loss:        5.630198  [ 2272/ 8081]
+loss:        5.653317  [ 2592/ 8081]
+loss:        5.436688  [ 2912/ 8081]
+loss:        5.958178  [ 3232/ 8081]
+loss:        5.440780  [ 3552/ 8081]
+loss:        5.431932  [ 3872/ 8081]
+loss:        5.609800  [ 4192/ 8081]
+loss:        5.665380  [ 4512/ 8081]
+loss:        5.957418  [ 4832/ 8081]
+loss:        4.937189  [ 5152/ 8081]
+loss:        6.138237  [ 5472/ 8081]
+loss:        6.117325  [ 5792/ 8081]
+loss:        5.992046  [ 6112/ 8081]
+loss:        5.035103  [ 6432/ 8081]
+loss:        6.369143  [ 6752/ 8081]
+loss:        5.848080  [ 7072/ 8081]
+loss:        6.836145  [ 7392/ 8081]
+loss:        5.299628  [ 7712/ 8081]
+loss:        5.602996  [ 8032/ 8081]
+
+Avg training loss:        5.735829
+Val loss: 5.639682  (hab: 9.145324, mov: 5.670968)
+Validation loss decreased (5.639725 → 5.639682). Saving model…
+
+Epoch 27/50
+loss:        4.927288  [   32/ 8081]
+loss:        6.503007  [  352/ 8081]
+loss:        5.772881  [  672/ 8081]
+loss:        5.601285  [  992/ 8081]
+loss:        5.897579  [ 1312/ 8081]
+loss:        5.781460  [ 1632/ 8081]
+loss:        5.490117  [ 1952/ 8081]
+loss:        5.170106  [ 2272/ 8081]
+loss:        6.280233  [ 2592/ 8081]
+loss:        5.659313  [ 2912/ 8081]
+loss:        5.048002  [ 3232/ 8081]
+loss:        5.602965  [ 3552/ 8081]
+loss:        6.199113  [ 3872/ 8081]
+loss:        5.848446  [ 4192/ 8081]
+loss:        5.756188  [ 4512/ 8081]
+loss:        5.665813  [ 4832/ 8081]
+loss:        4.977673  [ 5152/ 8081]
+loss:        5.520265  [ 5472/ 8081]
+loss:        5.220546  [ 5792/ 8081]
+loss:        5.660740  [ 6112/ 8081]
+loss:        5.151398  [ 6432/ 8081]
+loss:        6.287862  [ 6752/ 8081]
+loss:        5.646356  [ 7072/ 8081]
+loss:        6.649393  [ 7392/ 8081]
+loss:        5.878810  [ 7712/ 8081]
+loss:        5.759536  [ 8032/ 8081]
+
+Avg training loss:        5.733462
+Val loss: 5.639660  (hab: 9.145306, mov: 5.670936)
+Validation loss decreased (5.639682 → 5.639660). Saving model…
+
+Epoch 28/50
+loss:        6.236925  [   32/ 8081]
+loss:        6.146458  [  352/ 8081]
+loss:        5.195530  [  672/ 8081]
+loss:        5.583611  [  992/ 8081]
+loss:        5.273785  [ 1312/ 8081]
+loss:        5.463507  [ 1632/ 8081]
+loss:        5.881322  [ 1952/ 8081]
+loss:        6.306096  [ 2272/ 8081]
+loss:        5.130684  [ 2592/ 8081]
+loss:        5.816171  [ 2912/ 8081]
+loss:        6.420640  [ 3232/ 8081]
+loss:        5.765622  [ 3552/ 8081]
+loss:        5.842854  [ 3872/ 8081]
+loss:        5.821796  [ 4192/ 8081]
+loss:        5.756525  [ 4512/ 8081]
+loss:        5.565989  [ 4832/ 8081]
+loss:        5.573711  [ 5152/ 8081]
+loss:        5.448873  [ 5472/ 8081]
+loss:        6.393813  [ 5792/ 8081]
+loss:        5.563116  [ 6112/ 8081]
+loss:        7.175228  [ 6432/ 8081]
+loss:        4.962247  [ 6752/ 8081]
+loss:        5.873940  [ 7072/ 8081]
+loss:        5.759718  [ 7392/ 8081]
+loss:        5.624741  [ 7712/ 8081]
+loss:        5.907386  [ 8032/ 8081]
+
+Avg training loss:        5.733195
+Val loss: 5.639641  (hab: 9.145159, mov: 5.670897)
+Validation loss decreased (5.639660 → 5.639641). Saving model…
+
+Epoch 29/50
+loss:        6.709939  [   32/ 8081]
+loss:        6.194642  [  352/ 8081]
+loss:        5.739034  [  672/ 8081]
+loss:        5.670167  [  992/ 8081]
+loss:        4.941658  [ 1312/ 8081]
+loss:        5.502157  [ 1632/ 8081]
+loss:        6.519639  [ 1952/ 8081]
+loss:        5.792060  [ 2272/ 8081]
+loss:        5.513575  [ 2592/ 8081]
+loss:        5.989444  [ 2912/ 8081]
+loss:        6.193710  [ 3232/ 8081]
+loss:        5.135377  [ 3552/ 8081]
+loss:        5.945956  [ 3872/ 8081]
+loss:        4.705295  [ 4192/ 8081]
+loss:        5.501117  [ 4512/ 8081]
+loss:        5.852671  [ 4832/ 8081]
+loss:        6.271144  [ 5152/ 8081]
+loss:        5.952385  [ 5472/ 8081]
+loss:        5.365061  [ 5792/ 8081]
+loss:        6.104717  [ 6112/ 8081]
+loss:        5.881651  [ 6432/ 8081]
+loss:        5.851075  [ 6752/ 8081]
+loss:        5.142447  [ 7072/ 8081]
+loss:        5.647768  [ 7392/ 8081]
+loss:        5.986320  [ 7712/ 8081]
+loss:        5.402556  [ 8032/ 8081]
+
+Avg training loss:        5.734142
+Val loss: 5.639626  (hab: 9.145162, mov: 5.670893)
+Validation loss decreased (5.639641 → 5.639626). Saving model…
+
+Epoch 30/50
+loss:        5.612227  [   32/ 8081]
+loss:        5.494819  [  352/ 8081]
+loss:        4.629119  [  672/ 8081]
+loss:        6.452594  [  992/ 8081]
+loss:        5.972569  [ 1312/ 8081]
+loss:        5.160095  [ 1632/ 8081]
+loss:        5.795186  [ 1952/ 8081]
+loss:        5.309612  [ 2272/ 8081]
+loss:        5.891468  [ 2592/ 8081]
+loss:        5.696829  [ 2912/ 8081]
+loss:        5.713593  [ 3232/ 8081]
+loss:        6.069798  [ 3552/ 8081]
+loss:        4.935905  [ 3872/ 8081]
+loss:        5.428632  [ 4192/ 8081]
+loss:        5.866337  [ 4512/ 8081]
+loss:        5.686249  [ 4832/ 8081]
+loss:        5.791387  [ 5152/ 8081]
+loss:        6.364533  [ 5472/ 8081]
+loss:        5.466154  [ 5792/ 8081]
+loss:        5.667849  [ 6112/ 8081]
+loss:        5.313776  [ 6432/ 8081]
+loss:        6.761433  [ 6752/ 8081]
+loss:        6.629786  [ 7072/ 8081]
+loss:        5.532158  [ 7392/ 8081]
+loss:        6.032206  [ 7712/ 8081]
+loss:        5.922668  [ 8032/ 8081]
+
+Avg training loss:        5.734589
+Val loss: 5.639633  (hab: 9.145213, mov: 5.670889)
+EarlyStopping counter: 1 out of 5
+
+Epoch 31/50
+loss:        6.855468  [   32/ 8081]
+loss:        5.549836  [  352/ 8081]
+loss:        5.501370  [  672/ 8081]
+loss:        6.163689  [  992/ 8081]
+loss:        6.146986  [ 1312/ 8081]
+loss:        5.668081  [ 1632/ 8081]
+loss:        5.154352  [ 1952/ 8081]
+loss:        6.032871  [ 2272/ 8081]
+loss:        5.482692  [ 2592/ 8081]
+loss:        6.838123  [ 2912/ 8081]
+loss:        6.182957  [ 3232/ 8081]
+loss:        5.312598  [ 3552/ 8081]
+loss:        5.461801  [ 3872/ 8081]
+loss:        5.386752  [ 4192/ 8081]
+loss:        6.306053  [ 4512/ 8081]
+loss:        5.683695  [ 4832/ 8081]
+loss:        5.795979  [ 5152/ 8081]
+loss:        5.956809  [ 5472/ 8081]
+loss:        5.825184  [ 5792/ 8081]
+loss:        5.104815  [ 6112/ 8081]
+loss:        5.338410  [ 6432/ 8081]
+loss:        4.392776  [ 6752/ 8081]
+loss:        5.910175  [ 7072/ 8081]
+loss:        4.851960  [ 7392/ 8081]
+loss:        5.446443  [ 7712/ 8081]
+loss:        5.372225  [ 8032/ 8081]
+
+Avg training loss:        5.733252
+Val loss: 5.639620  (hab: 9.145216, mov: 5.670887)
+Validation loss decreased (5.639626 → 5.639620). Saving model…
+
+Epoch 32/50
+loss:        5.426272  [   32/ 8081]
+loss:        5.630202  [  352/ 8081]
+loss:        5.632508  [  672/ 8081]
+loss:        5.438181  [  992/ 8081]
+loss:        5.693160  [ 1312/ 8081]
+loss:        5.824766  [ 1632/ 8081]
+loss:        4.332841  [ 1952/ 8081]
+loss:        5.520078  [ 2272/ 8081]
+loss:        5.456306  [ 2592/ 8081]
+loss:        5.956411  [ 2912/ 8081]
+loss:        5.646355  [ 3232/ 8081]
+loss:        5.780666  [ 3552/ 8081]
+loss:        5.656393  [ 3872/ 8081]
+loss:        6.113107  [ 4192/ 8081]
+loss:        5.247138  [ 4512/ 8081]
+loss:        6.456845  [ 4832/ 8081]
+loss:        5.673826  [ 5152/ 8081]
+loss:        6.329019  [ 5472/ 8081]
+loss:        6.144670  [ 5792/ 8081]
+loss:        6.344707  [ 6112/ 8081]
+loss:        6.364787  [ 6432/ 8081]
+loss:        5.852273  [ 6752/ 8081]
+loss:        5.987990  [ 7072/ 8081]
+loss:        5.569731  [ 7392/ 8081]
+loss:        6.279569  [ 7712/ 8081]
+loss:        5.453013  [ 8032/ 8081]
+
+Avg training loss:        5.732120
+Val loss: 5.639620  (hab: 9.145214, mov: 5.670886)
+Validation loss decreased (5.639620 → 5.639620). Saving model…
+
+Epoch 33/50
+loss:        5.268016  [   32/ 8081]
+loss:        5.237939  [  352/ 8081]
+loss:        5.922724  [  672/ 8081]
+loss:        5.021144  [  992/ 8081]
+loss:        6.242224  [ 1312/ 8081]
+loss:        5.304910  [ 1632/ 8081]
+loss:        6.274157  [ 1952/ 8081]
+loss:        5.443479  [ 2272/ 8081]
+loss:        5.825380  [ 2592/ 8081]
+loss:        4.930949  [ 2912/ 8081]
+loss:        5.148467  [ 3232/ 8081]
+loss:        5.614328  [ 3552/ 8081]
+loss:        5.556447  [ 3872/ 8081]
+loss:        6.509217  [ 4192/ 8081]
+loss:        5.418288  [ 4512/ 8081]
+loss:        5.584445  [ 4832/ 8081]
+loss:        6.188684  [ 5152/ 8081]
+loss:        5.922045  [ 5472/ 8081]
+loss:        5.749983  [ 5792/ 8081]
+loss:        5.129826  [ 6112/ 8081]
+loss:        5.641623  [ 6432/ 8081]
+loss:        7.205474  [ 6752/ 8081]
+loss:        5.569323  [ 7072/ 8081]
+loss:        5.049457  [ 7392/ 8081]
+loss:        5.763159  [ 7712/ 8081]
+loss:        5.636391  [ 8032/ 8081]
+
+Avg training loss:        5.731416
+Val loss: 5.639621  (hab: 9.145215, mov: 5.670886)
+EarlyStopping counter: 1 out of 5
+
+Epoch 34/50
+loss:        5.573732  [   32/ 8081]
+loss:        4.562861  [  352/ 8081]
+loss:        6.424152  [  672/ 8081]
+loss:        5.473699  [  992/ 8081]
+loss:        5.866921  [ 1312/ 8081]
+loss:        5.599736  [ 1632/ 8081]
+loss:        5.116332  [ 1952/ 8081]
+loss:        5.631752  [ 2272/ 8081]
+loss:        5.095023  [ 2592/ 8081]
+loss:        6.444837  [ 2912/ 8081]
+loss:        5.993291  [ 3232/ 8081]
+loss:        6.616193  [ 3552/ 8081]
+loss:        5.721396  [ 3872/ 8081]
+loss:        5.316614  [ 4192/ 8081]
+loss:        4.425422  [ 4512/ 8081]
+loss:        5.275918  [ 4832/ 8081]
+loss:        5.434562  [ 5152/ 8081]
+loss:        5.448647  [ 5472/ 8081]
+loss:        5.664916  [ 5792/ 8081]
+loss:        5.117067  [ 6112/ 8081]
+loss:        5.216536  [ 6432/ 8081]
+loss:        6.023912  [ 6752/ 8081]
+loss:        6.081383  [ 7072/ 8081]
+loss:        6.285754  [ 7392/ 8081]
+loss:        4.963202  [ 7712/ 8081]
+loss:        5.865150  [ 8032/ 8081]
+
+Avg training loss:        5.731098
+Val loss: 5.639621  (hab: 9.145216, mov: 5.670886)
+EarlyStopping counter: 2 out of 5
+
+Epoch 35/50
+loss:        6.021615  [   32/ 8081]
+loss:        4.532571  [  352/ 8081]
+loss:        5.175756  [  672/ 8081]
+loss:        5.827329  [  992/ 8081]
+loss:        5.984054  [ 1312/ 8081]
+loss:        5.343431  [ 1632/ 8081]
+loss:        6.666986  [ 1952/ 8081]
+loss:        6.816831  [ 2272/ 8081]
+loss:        5.876522  [ 2592/ 8081]
+loss:        5.746874  [ 2912/ 8081]
+loss:        5.963414  [ 3232/ 8081]
+loss:        4.622033  [ 3552/ 8081]
+loss:        6.336753  [ 3872/ 8081]
+loss:        5.816704  [ 4192/ 8081]
+loss:        5.761320  [ 4512/ 8081]
+loss:        5.750998  [ 4832/ 8081]
+loss:        4.660877  [ 5152/ 8081]
+loss:        5.898358  [ 5472/ 8081]
+loss:        5.581824  [ 5792/ 8081]
+loss:        4.712275  [ 6112/ 8081]
+loss:        5.580365  [ 6432/ 8081]
+loss:        5.149635  [ 6752/ 8081]
+loss:        4.571750  [ 7072/ 8081]
+loss:        5.565580  [ 7392/ 8081]
+loss:        6.358205  [ 7712/ 8081]
+loss:        5.638477  [ 8032/ 8081]
+
+Avg training loss:        5.731328
+Val loss: 5.639621  (hab: 9.145216, mov: 5.670886)
+EarlyStopping counter: 3 out of 5
+
+Epoch 36/50
+loss:        5.219586  [   32/ 8081]
+loss:        5.866108  [  352/ 8081]
+loss:        5.157986  [  672/ 8081]
+loss:        5.456277  [  992/ 8081]
+loss:        6.346135  [ 1312/ 8081]
+loss:        6.265892  [ 1632/ 8081]
+loss:        5.365193  [ 1952/ 8081]
+loss:        5.935129  [ 2272/ 8081]
+loss:        5.507366  [ 2592/ 8081]
+loss:        5.146176  [ 2912/ 8081]
+loss:        6.031135  [ 3232/ 8081]
+loss:        5.098520  [ 3552/ 8081]
+loss:        6.378906  [ 3872/ 8081]
+loss:        5.300342  [ 4192/ 8081]
+loss:        6.126292  [ 4512/ 8081]
+loss:        5.154186  [ 4832/ 8081]
+loss:        5.361709  [ 5152/ 8081]
+loss:        5.572066  [ 5472/ 8081]
+loss:        5.279382  [ 5792/ 8081]
+loss:        4.960338  [ 6112/ 8081]
+loss:        6.301264  [ 6432/ 8081]
+loss:        5.728517  [ 6752/ 8081]
+loss:        6.473097  [ 7072/ 8081]
+loss:        6.075172  [ 7392/ 8081]
+loss:        5.903062  [ 7712/ 8081]
+loss:        6.081424  [ 8032/ 8081]
+
+Avg training loss:        5.735796
+Val loss: 5.639621  (hab: 9.145216, mov: 5.670885)
+EarlyStopping counter: 4 out of 5
+
+Epoch 37/50
+loss:        6.125269  [   32/ 8081]
+loss:        5.612249  [  352/ 8081]
+loss:        5.744735  [  672/ 8081]
+loss:        5.696525  [  992/ 8081]
+loss:        6.524700  [ 1312/ 8081]
+loss:        5.233836  [ 1632/ 8081]
+loss:        6.115005  [ 1952/ 8081]
+loss:        5.521945  [ 2272/ 8081]
+loss:        5.175142  [ 2592/ 8081]
+loss:        6.153426  [ 2912/ 8081]
+loss:        6.875118  [ 3232/ 8081]
+loss:        5.568776  [ 3552/ 8081]
+loss:        6.070964  [ 3872/ 8081]
+loss:        4.977057  [ 4192/ 8081]
+loss:        6.165647  [ 4512/ 8081]
+loss:        6.339566  [ 4832/ 8081]
+loss:        5.571197  [ 5152/ 8081]
+loss:        5.252230  [ 5472/ 8081]
+loss:        6.161972  [ 5792/ 8081]
+loss:        5.660664  [ 6112/ 8081]
+loss:        6.967310  [ 6432/ 8081]
+loss:        4.854573  [ 6752/ 8081]
+loss:        5.381294  [ 7072/ 8081]
+loss:        5.590603  [ 7392/ 8081]
+loss:        5.565978  [ 7712/ 8081]
+loss:        5.514409  [ 8032/ 8081]
+
+Avg training loss:        5.734960
+Val loss: 5.639621  (hab: 9.145216, mov: 5.670885)
+EarlyStopping counter: 5 out of 5
+Early stopping triggered.</code></pre>
+</div>
+</div>
+<div id="cell-17" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:50.783006Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:50.782935Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:50.844264Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:50.843837Z&quot;}}" data-execution_count="22">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>gif_path <span class="op">=</span> <span class="bu">str</span>(OUTPUT_DIR <span class="op">/</span> <span class="st">"training_progress.gif"</span>)</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>create_gif(<span class="bu">str</span>(SNAPSHOT_DIR), gif_path, fps<span class="op">=</span><span class="dv">5</span>)</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Training GIF → </span><span class="sc">{</span>gif_path<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Play the gif</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>Image(gif_path)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Animation saved: outputs/training_progress.gif
+Training GIF → outputs/training_progress.gif</code></pre>
+</div>
+<div class="cell-output cell-output-display" data-execution_count="22">
+<pre><code>&lt;IPython.core.display.Image object&gt;</code></pre>
+</div>
+</div>
+<div id="cell-18" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:50.845346Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:50.845277Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:50.902205Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:50.901741Z&quot;}}" data-execution_count="23">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>fig, ax <span class="op">=</span> plt.subplots(figsize<span class="op">=</span>(<span class="dv">7</span>, <span class="dv">3</span>))</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>ax.plot(history[<span class="st">"train_losses"</span>], label<span class="op">=</span><span class="st">"train"</span>)</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>ax.plot(history[<span class="st">"val_losses"</span>],   label<span class="op">=</span><span class="st">"val"</span>)</span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>ax.set_xlabel(<span class="st">"Epoch"</span>)</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>ax.set_ylabel(<span class="st">"NLL loss"</span>)</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>ax.legend()</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>ax.set_title(<span class="st">"Training history"</span>)</span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>plt.savefig(<span class="bu">str</span>(OUTPUT_DIR <span class="op">/</span> <span class="st">"loss_history.png"</span>), dpi<span class="op">=</span><span class="dv">100</span>)</span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="deepssf_train_validate_example_files/figure-html/cell-15-output-1.png" class="img-fluid figure-img"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section id="validate-against-withheld-test-data" class="level2">
+<h2 class="anchored" data-anchor-id="validate-against-withheld-test-data">4 Validate against withheld test data</h2>
+<div id="cell-20" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:50.903320Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:50.903258Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:50.915126Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:50.914825Z&quot;}}" data-execution_count="24">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Load the best checkpoint saved during training</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>model.load_state_dict(</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>    torch.load(<span class="bu">str</span>(OUTPUT_DIR <span class="op">/</span> <span class="st">"best_model.pt"</span>), map_location<span class="op">=</span>DEVICE)</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>model.<span class="bu">eval</span>()</span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"Best checkpoint loaded."</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Best checkpoint loaded.</code></pre>
+</div>
+</div>
+<div id="cell-21" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:50.916194Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:50.916137Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:50.918681Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:50.918330Z&quot;}}" data-execution_count="25">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb30"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Wrap the static rasters as a landscape-loader callable.</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Month index is ignored here because we have static (non-S2) layers.</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>ndvi_t  <span class="op">=</span> torch.from_numpy(env_layers[<span class="st">"ndvi"</span>].astype(np.float32))</span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>slope_t <span class="op">=</span> torch.from_numpy(env_layers[<span class="st">"slope"</span>].astype(np.float32))</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> get_landscape(_month_index):</span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> [ndvi_t, slope_t]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<div id="cell-22" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:50.919665Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:50.919614Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:53.535671Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:53.535265Z&quot;}}" data-execution_count="26">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Use the last 10 % of steps as the test set (matches the DataLoader split)</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>n_test      <span class="op">=</span> <span class="bu">int</span>(<span class="bu">len</span>(step_df) <span class="op">*</span> <span class="fl">0.1</span>)</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>test_sample <span class="op">=</span> step_df.iloc[<span class="op">-</span>n_test:].reset_index(drop<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Validating on </span><span class="sc">{</span><span class="bu">len</span>(test_sample)<span class="sc">:,}</span><span class="ss"> steps"</span>)</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>val_results <span class="op">=</span> validate_next_step_probs(</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>    model,</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>    test_sample,</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    get_landscape<span class="op">=</span>get_landscape,</span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>    transform<span class="op">=</span>raster_transform,</span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>    window_size<span class="op">=</span>WINDOW_SIZE,</span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>    scalar_cols<span class="op">=</span><span class="bu">tuple</span>(SCALAR_COLS),</span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>    yday_col<span class="op">=</span><span class="st">"yday_t1"</span>,</span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a>    bearing_col<span class="op">=</span><span class="st">"bearing_tm1"</span>,</span>
+<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a>    month_index_fn<span class="op">=</span><span class="kw">lambda</span> _yday: <span class="dv">0</span>,   <span class="co"># static layers — month doesn't matter</span></span>
+<span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(val_results[[<span class="st">"habitat_prob"</span>, <span class="st">"move_prob"</span>, <span class="st">"next_step_prob"</span>]].describe())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Validating on 1,010 steps
+       habitat_prob    move_prob  next_step_prob
+count   1010.000000  1010.000000     1010.000000
+mean       0.000126     0.027330        0.030069
+std        0.000050     0.054359        0.060509
+min        0.000000     0.000000        0.000000
+25%        0.000093     0.000224        0.000228
+50%        0.000112     0.006624        0.007082
+75%        0.000155     0.030587        0.034205
+max        0.000430     0.255475        0.334267</code></pre>
+</div>
+</div>
+<div id="cell-23" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:53.536792Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:53.536726Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:53.696983Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:53.696493Z&quot;}}" data-execution_count="27">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb33"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">3</span>, figsize<span class="op">=</span>(<span class="dv">12</span>, <span class="dv">3</span>))</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, col, title <span class="kw">in</span> <span class="bu">zip</span>(</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>    axes,</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>    [<span class="st">"habitat_prob"</span>, <span class="st">"move_prob"</span>, <span class="st">"next_step_prob"</span>],</span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>    [<span class="st">"Habitat"</span>, <span class="st">"Movement"</span>, <span class="st">"Joint next-step"</span>],</span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>):</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>    data <span class="op">=</span> val_results[col].dropna()</span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>    ax.hist(data, bins<span class="op">=</span><span class="dv">40</span>, edgecolor<span class="op">=</span><span class="st">"white"</span>)</span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>    ax.set_title(title)</span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>    ax.set_xlabel(<span class="st">"Probability"</span>)</span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">0</span>].set_ylabel(<span class="st">"Count"</span>)</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a>plt.suptitle(<span class="st">"Next-step probability distributions (test set)"</span>, y<span class="op">=</span><span class="fl">1.02</span>)</span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
+<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a>plt.savefig(<span class="bu">str</span>(OUTPUT_DIR <span class="op">/</span> <span class="st">"validation_probs.png"</span>), dpi<span class="op">=</span><span class="dv">100</span>)</span>
+<span id="cb33-15"><a href="#cb33-15" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="deepssf_train_validate_example_files/figure-html/cell-19-output-1.png" class="img-fluid figure-img"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section id="simulate-a-trajectory" class="level2">
+<h2 class="anchored" data-anchor-id="simulate-a-trajectory">5 Simulate a trajectory</h2>
+<div id="cell-25" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:53.698348Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:53.698259Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:57.805267Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:57.804872Z&quot;}}" data-execution_count="28">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb34"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>start_x <span class="op">=</span> <span class="bu">float</span>(step_df[<span class="st">"x1_"</span>].median())</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>start_y <span class="op">=</span> <span class="bu">float</span>(step_df[<span class="st">"y1_"</span>].median())</span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Starting location: (</span><span class="sc">{</span>start_x<span class="sc">:.0f}</span><span class="ss">, </span><span class="sc">{</span>start_y<span class="sc">:.0f}</span><span class="ss">)"</span>)</span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>sim_df <span class="op">=</span> simulate_trajectory(</span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>    model,</span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>    get_landscape<span class="op">=</span>get_landscape,</span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>    transform<span class="op">=</span>raster_transform,</span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a>    start_x<span class="op">=</span>start_x,</span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>    start_y<span class="op">=</span>start_y,</span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a>    n_steps<span class="op">=</span><span class="dv">1000</span>,</span>
+<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a>    starting_yday<span class="op">=</span>test_sample[<span class="st">"yday_t1"</span>].iloc[<span class="dv">0</span>],</span>
+<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a>    starting_hour<span class="op">=</span>test_sample[<span class="st">"hour_t1"</span>].iloc[<span class="dv">0</span>],</span>
+<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>    time_between_steps<span class="op">=</span><span class="fl">1.0</span>,</span>
+<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>    window_size<span class="op">=</span>WINDOW_SIZE,</span>
+<span id="cb34-16"><a href="#cb34-16" aria-hidden="true" tabindex="-1"></a>    month_index_fn<span class="op">=</span><span class="kw">lambda</span> _yday: <span class="dv">0</span>,   <span class="co"># static layers</span></span>
+<span id="cb34-17"><a href="#cb34-17" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb34-18"><a href="#cb34-18" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Simulated </span><span class="sc">{</span><span class="bu">len</span>(sim_df)<span class="sc">}</span><span class="ss"> steps"</span>)</span>
+<span id="cb34-19"><a href="#cb34-19" aria-hidden="true" tabindex="-1"></a>sim_df.head()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Starting location: (36111, -1436905)
+Simulated 1000 steps</code></pre>
+</div>
+<div class="cell-output cell-output-display" data-execution_count="28">
+<div>
+
+
+<table class="dataframe caption-top table table-sm table-striped small" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">x</th>
+<th data-quarto-table-cell-role="th">y</th>
+<th data-quarto-table-cell-role="th">hour</th>
+<th data-quarto-table-cell-role="th">yday</th>
+<th data-quarto-table-cell-role="th">month_index</th>
+<th data-quarto-table-cell-role="th">hab_log_prob</th>
+<th data-quarto-table-cell-role="th">move_log_prob</th>
+<th data-quarto-table-cell-role="th">step_log_prob</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">0</th>
+<td>36108.269587</td>
+<td>-1.436912e+06</td>
+<td>18.916667</td>
+<td>255.000000</td>
+<td>0</td>
+<td>[[-9.412999, -9.240336, -9.038588, -8.982068, ...</td>
+<td>[[-13.963823, -13.919329, -13.875055, -13.8310...</td>
+<td>[[-23.376823, -23.159664, -22.913643, -22.8130...</td>
+</tr>
+<tr class="even">
+<th data-quarto-table-cell-role="th">1</th>
+<td>35898.710528</td>
+<td>-1.436614e+06</td>
+<td>19.916667</td>
+<td>255.041667</td>
+<td>0</td>
+<td>[[-9.405268, -9.207009, -8.999849, -8.948765, ...</td>
+<td>[[-13.95573, -13.91391, -13.872377, -13.831140...</td>
+<td>[[-23.360998, -23.120918, -22.872227, -22.7799...</td>
+</tr>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">2</th>
+<td>36464.367638</td>
+<td>-1.436123e+06</td>
+<td>20.916667</td>
+<td>255.083333</td>
+<td>0</td>
+<td>[[-9.160653, -9.023066, -8.815113, -8.739051, ...</td>
+<td>[[-13.513008, -13.469606, -13.426506, -13.3837...</td>
+<td>[[-22.67366, -22.492672, -22.24162, -22.122772...</td>
+</tr>
+<tr class="even">
+<th data-quarto-table-cell-role="th">3</th>
+<td>36435.540267</td>
+<td>-1.436041e+06</td>
+<td>21.916667</td>
+<td>255.125000</td>
+<td>0</td>
+<td>[[-8.481404, -8.342018, -8.182885, -8.192506, ...</td>
+<td>[[-13.816451, -13.771689, -13.727157, -13.6828...</td>
+<td>[[-22.297855, -22.113708, -21.910042, -21.8753...</td>
+</tr>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">4</th>
+<td>36439.641807</td>
+<td>-1.436043e+06</td>
+<td>22.916667</td>
+<td>255.166667</td>
+<td>0</td>
+<td>[[-8.254223, -8.155582, -7.9846506, -7.9550314...</td>
+<td>[[-13.654331, -13.611277, -13.568495, -13.5259...</td>
+<td>[[-21.908554, -21.76686, -21.553146, -21.48103...</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<div id="cell-26" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-05-25T00:07:57.806437Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-05-25T00:07:57.806367Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-05-25T00:07:57.904907Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-05-25T00:07:57.904447Z&quot;}}" data-execution_count="29">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb36"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a>fig, ax <span class="op">=</span> plt.subplots(figsize<span class="op">=</span>(<span class="dv">7</span>, <span class="dv">6</span>))</span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>rasterio.plot.show(env_layers[<span class="st">"ndvi"</span>], transform<span class="op">=</span>raster_transform, ax<span class="op">=</span>ax, cmap<span class="op">=</span><span class="st">'viridis'</span>)</span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>ax.plot(</span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>    step_df[<span class="st">"x1_"</span>], step_df[<span class="st">"y1_"</span>],</span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"w-o"</span>, alpha<span class="op">=</span><span class="fl">0.5</span>, markersize<span class="op">=</span><span class="dv">1</span>, linewidth<span class="op">=</span><span class="fl">0.8</span>, label<span class="op">=</span><span class="st">"observed"</span>,</span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>ax.plot(</span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>    sim_df[<span class="st">"x"</span>], sim_df[<span class="st">"y"</span>],</span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a>    <span class="st">"r-o"</span>, markersize<span class="op">=</span><span class="dv">1</span>, linewidth<span class="op">=</span><span class="fl">0.8</span>, label<span class="op">=</span><span class="st">"simulated"</span>,</span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>ax.set_xlabel(<span class="st">"Easting (m, projected)"</span>)</span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>ax.set_ylabel(<span class="st">"Northing (m, projected)"</span>)</span>
+<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>ax.legend()</span>
+<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a>ax.set_title(<span class="st">"Simulated vs observed buffalo locations"</span>)</span>
+<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
+<span id="cb36-16"><a href="#cb36-16" aria-hidden="true" tabindex="-1"></a>plt.savefig(<span class="bu">str</span>(OUTPUT_DIR <span class="op">/</span> <span class="st">"simulated_trajectory.png"</span>), dpi<span class="op">=</span><span class="dv">100</span>)</span>
+<span id="cb36-17"><a href="#cb36-17" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="deepssf_train_validate_example_files/figure-html/cell-21-output-1.png" class="img-fluid figure-img"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

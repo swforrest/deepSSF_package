@@ -513,6 +513,7 @@ def prepare_movement_df(
                 "t1_":           dep[time_col].values,
                 "x1_":           dep[x_col].values,
                 "y1_":           dep[y_col].values,
+                "t2_":           arr[time_col].values,
                 "x2_":           arr[x_col].values,
                 "y2_":           arr[y_col].values,
                 "dx":            dx,

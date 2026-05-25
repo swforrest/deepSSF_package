@@ -287,12 +287,12 @@ def clear_memory(device: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 def _extract_epoch_index(filename: str) -> int:
-    """Extract epoch number from a filename like ``..._index42_...``."""
-    match = re.search(r'index(\d+)_', filename)
+    """Extract epoch number from a filename like ``..._epoch_42...``."""
+    match = re.search(r'epoch_(\d+)', filename)
     return int(match.group(1)) if match else 0
 
 
-def create_gif(image_folder: str, output_filename: str, fps: int = 10) -> None:
+def create_gif(image_folder: str, output_filename: str, fps: int = 5) -> None:
     """Create a GIF (or MP4) from PNG frames in *image_folder*.
 
     Frames are sorted by epoch index extracted from their filenames.
