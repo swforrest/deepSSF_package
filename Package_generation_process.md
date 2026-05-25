@@ -10,10 +10,9 @@ Python package.
 
 The repo contained:
 
-- A monolithic analysis notebook (`deepSSF_train_validate_s2.ipynb`) with all
-  model definition, data loading, training, simulation, and validation code
-  written inline.
-- A separate simulation notebook (`deepSSF_simulations.ipynb`).
+- A number of analysis notebooks from https://swforrest.github.io/deepSSF/ with
+  model definitions, data loading, training, simulation, and validation code
+  written as a combination of inline and as separate py scripts.
 - No `pyproject.toml`, no `src/` layout, no tests, no installable package.
 
 ---
