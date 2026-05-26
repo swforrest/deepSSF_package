@@ -347,7 +347,7 @@ def test_make_simulation_inputs_shape():
     x2, hours, ydays = make_simulation_inputs(
         n_steps=10, starting_yday=90, starting_hour=6
     )
-    assert x2.shape == (10, 4)
+    assert x2.shape == (10, 5)  # sin_hour, cos_hour, sin_yday, cos_yday, dt
     assert hours.shape == (10,)
     assert ydays.shape == (10,)
 
@@ -418,19 +418,31 @@ def test_simulate_trajectory_dataframe_shape(small_params):
     from deepssf.model import ConvJointModel, ModelParams
     from deepssf.simulate import simulate_trajectory
 
+    from deepssf.simulate import make_simulation_inputs
+
     dim = small_params.image_dim
     for _ in range(3):
         dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
         dim = math.floor((dim - 2) / 2 + 1)
     flat = small_params.output_channels * dim * dim
-    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+
+    # Probe make_simulation_inputs to find out how many scalar columns it emits.
+    # This keeps the test in sync with the function automatically if columns change.
+    n_scalars = make_simulation_inputs(n_steps=1, starting_yday=1)[0].shape[1]
+    n_spatial = 2  # number of raster channels used in this test
+    params = ModelParams({
+        **small_params.__dict__,
+        "dim_in_nonspatial_to_grid": n_scalars,
+        "input_channels": n_spatial + n_scalars,
+        "dense_dim_in_all": flat,
+    })
     model = ConvJointModel(params)
 
     W = 11
     transform = rasterio.transform.from_bounds(
         0, 0, W * 25 * 10, W * 25 * 10, W * 10, W * 10
     )
-    rasters = [torch.ones(W * 10, W * 10) for _ in range(2)]
+    rasters = [torch.ones(W * 10, W * 10) for _ in range(n_spatial)]
 
     df = simulate_trajectory(
         model,
@@ -764,7 +776,14 @@ def test_fit_returns_loss_history(small_params):
     loss_fn = negativeLogLikeLoss(reduction="mean")
     optimisers, schedulers = make_optimisers(model)
     history = fit(
-        model, _DL(), _DL(), loss_fn, optimisers, schedulers,
+        model,
+        n_conv_layers=3,       # number of conv layers (used only for snapshots)
+        window_size=H,         # spatial crop size (used only for snapshots)
+        dl_train=_DL(),
+        dl_val=_DL(),
+        loss_fn=loss_fn,
+        optimisers=optimisers,
+        schedulers=schedulers,
         n_epochs=2,
         snapshot_dir=None,
     )
