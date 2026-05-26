@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 
 # --- Project metadata (this is what shows up on PyPI) -------------------------
 [project]
-name = "deepssf"
+name = "deepSSF"
 dynamic = ["version"]          # version is read from src/deepssf/__init__.py (see below)
 description = "Deep learning step selection functions for predicting animal movement."
 readme = "README.md"
@@ -18,8 +18,7 @@ requires-python = ">=3.10"
 license = "MIT"                # <-- VERIFY this with your co-authors / journal
 license-files = ["LICENSE"]
 authors = [
-    { name = "Scott Forrest", email = "scottwforrest@gmail.com" },
-    { name = "Dan Pagendam" }
+    { name = "Scott Forrest", email = "scottwforrest@gmail.com" }
 ]
 keywords = ["ecology", "animal-movement", "deep-learning", "step-selection", "ssf"]
 classifiers = [

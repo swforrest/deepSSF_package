@@ -1,10 +1,33 @@
-# deepssf
+# deepSSF
 
 Deep learning step selection functions for predicting animal movement.
 
 This package provides the reusable, installable implementation of the deepSSF
 method. The accompanying paper, tutorials, and reproducibility code live at the
 [deepSSF project site](https://swforrest.github.io/deepSSF/).
+
+## Installation (pip only)
+
+If you manage your own Python environment, install deepSSF with:
+
+```bash
+pip install deepssf
+```
+
+Development install (editable, with linting and testing tools):
+
+```bash
+git clone https://github.com/swforrest/deepssf
+cd deepssf
+pip install -e ".[dev]"
+```
+
+## Quick start
+
+```python
+import deepssf
+print(deepssf.__version__)
+```
 
 ## Setting up (for users new to Python)
 
@@ -35,7 +58,7 @@ conda env create -f environment.yml
 ```
 
 This installs Python 3.11, the geospatial libraries (rasterio / GDAL / PROJ),
-Jupyter Lab, and the deepssf package itself with all of its dependencies.
+Jupyter Lab, and the deepSSF package itself with all of its dependencies.
 PyTorch is installed via pip with no extra flags — pip automatically picks the
 right build for your hardware: **MPS on Apple Silicon, CUDA on NVIDIA GPUs,
 CPU everywhere else**. No configuration is needed; the package selects the
@@ -47,7 +70,7 @@ correct backend at runtime.
 conda activate deepssf
 ```
 
-You will need to run this once per terminal session before using deepssf.
+You will need to run this once per terminal session before using deepSSF.
 
 ### 4. (Optional) Register the Jupyter kernel
 
@@ -67,29 +90,6 @@ jupyter lab
 Then open `examples/deepssf_train_validate_example.ipynb` to get started.
 
 ---
-
-## Installation (pip only)
-
-If you manage your own Python environment, install deepssf with:
-
-```bash
-pip install deepssf
-```
-
-Development install (editable, with linting and testing tools):
-
-```bash
-git clone https://github.com/swforrest/deepssf
-cd deepssf
-pip install -e ".[dev]"
-```
-
-## Quick start
-
-```python
-import deepssf
-print(deepssf.__version__)
-```
 
 ## Documentation
 
