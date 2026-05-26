@@ -40,12 +40,12 @@ def make_simulation_inputs(
     starting_hour:
         Hour of day at the first step (0–24).
     time_between_steps:
-        Time interval between consecutive steps in hours.
-            Used to compute the hour and day-of-year for each step.  Defaults to 1.0 (i.e. 1 hour between steps).
+        Time interval between consecutive steps in hours.  Used to advance the
+        clock and compute yday for each step.  Defaults to 1.0.
     Returns
     -------
     x2_full : ndarray, shape (n_steps, 5)
-        Rows are [sin_hour, cos_hour, sin_yday, cos_yday, time_between_steps] for each step.
+        Rows are ``[sin_hour, cos_hour, sin_yday, cos_yday, dt]`` for each step.
     hour_t2 : ndarray, shape (n_steps,)
         Hour value at each step.
     yday_t2 : ndarray, shape (n_steps,)
@@ -56,10 +56,12 @@ def make_simulation_inputs(
     x2_full = np.zeros((n_steps, 5))
 
     for i in range(n_steps):
+        # Advance clock by time_between_steps hours; wrap at 24 h and 365 days
         hour = (starting_hour + i * time_between_steps) % 24
         yday = ((starting_yday - 1 + i * time_between_steps/24) % 365) + 1
         hour_t2[i] = hour
         yday_t2[i] = yday
+        # Cyclic (sine/cosine) encoding preserves continuity at midnight and year-end
         x2_full[i, 0] = np.sin(2 * np.pi * hour / 24)
         x2_full[i, 1] = np.cos(2 * np.pi * hour / 24)
         x2_full[i, 2] = np.sin(2 * np.pi * yday / 365.25)
@@ -112,6 +114,8 @@ def simulate_next_step(
     """
     device = next(model.parameters()).device
 
+    # Crop a window_size × window_size patch from every raster channel at the
+    # current location; returns the patch plus its top-left pixel coordinates.
     results = [
         subset_raster_with_padding_torch(
             rt, x=x_loc, y=y_loc, window_size=window_size, transform=transform  # type: ignore[arg-type]
@@ -120,11 +124,13 @@ def simulate_next_step(
     ]
     subset_tensors, origin_xs, origin_ys = zip(*results, strict=True)
 
+    # Stack channels into [1, C, H, W] and move to the active device
     x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0).to(device)
     scalars_to_grid = scalars_to_grid.to(device)
     bearing = bearing.to(device)
 
-    # Mask cells outside the raster extent (padded with -1 in first channel)
+    # Cells padded with -1 lie outside the raster extent; replace with NaN so
+    # they receive zero probability after the softmax and are never sampled.
     first_channel = x1[0, 0, :, :]
     mask = torch.where(
         first_channel == -1, torch.tensor(float("nan")), torch.ones_like(first_channel)
@@ -133,21 +139,27 @@ def simulate_next_step(
     out = model((x1, scalars_to_grid, bearing))
     hab_log_prob = out[:, :, :, 0]
     move_log_prob = out[:, :, :, 1]
+    # Multiply by mask: NaN * 1 = NaN for out-of-bounds cells
     step_log_prob = (hab_log_prob + move_log_prob) * mask
 
+    # Convert to probability, zero out NaN cells, then renormalise to sum to 1
     step_prob = torch.exp(step_log_prob.squeeze())
     step_prob = torch.nan_to_num(step_prob, nan=0.0)
     step_prob_norm = step_prob / torch.sum(step_prob)
 
+    # Sample one pixel index from the discrete probability distribution
     flat = step_prob_norm.flatten().detach().cpu().numpy()
     sampled_index = np.random.choice(flat.size, p=flat)
     sampled_row, sampled_col = np.unravel_index(sampled_index, step_prob_norm.shape)
 
+    # Convert sampled local pixel to global pixel, then to geographic coordinates
     new_px = origin_xs[0] + sampled_col
     new_py = origin_ys[0] + sampled_row
     new_x, new_y = transform * (new_px, new_py)  # type: ignore[operator]
 
     # Sub-pixel jitter: uniform-ish within one cell (~95% within [0,25] / [-25,0])
+    # Adds positional uncertainty below the pixel resolution to avoid all simulated
+    # locations snapping to pixel-centre coordinates.
     while True:
         jitter_x = np.random.normal(12.5, 6.5)
         if 0.0 <= jitter_x <= 25.0:
@@ -220,6 +232,7 @@ def simulate_trajectory(
         x, y, hour, yday, month_index, hab_log_prob, move_log_prob, step_log_prob
     """
     model.eval()
+    # Pre-compute cyclic time encodings for every step up front
     x2_full, hour_t2, yday_t2 = make_simulation_inputs(
         n_steps, starting_yday, starting_hour, time_between_steps
     )
@@ -230,8 +243,11 @@ def simulate_trajectory(
 
     rows: list[dict] = []
     x_loc, y_loc = start_x, start_y
+    # No previous bearing at the start of the trajectory
     bearing = torch.zeros(1, 1)
 
+    # Load the landscape for the starting month; only reload when the month changes
+    # to avoid re-reading large rasters on every step.
     previous_yday: float | None = None
     month_index = _month_fn(starting_yday)
     landscape_rasters = get_landscape(month_index)
@@ -239,11 +255,13 @@ def simulate_trajectory(
     with torch.no_grad():
         for i in range(n_steps):
             yday = float(yday_t2[i])
+            # Reload landscape rasters only when the month changes
             if yday != previous_yday:
                 month_index = _month_fn(yday)
                 landscape_rasters = get_landscape(month_index)
                 previous_yday = yday
 
+            # Wrap precomputed scalar row as a [1, 5] tensor for the model
             scalars_to_grid = torch.tensor(x2_full[i], dtype=torch.float32).unsqueeze(0)
 
             new_x, new_y, hab_lp, move_lp, step_lp, px, py = simulate_next_step(
@@ -270,7 +288,8 @@ def simulate_trajectory(
                 }
             )
 
-            # Compute bearing for next step
+            # Update bearing from the sampled displacement; used as input to the
+            # movement sub-network on the next step (directional persistence).
             dx = new_x - x_loc
             dy = new_y - y_loc
             raw_bearing = float(np.arctan2(dy, dx))

@@ -58,22 +58,27 @@ def subset_raster_with_padding_torch(
     col_start, row_start:
         Top-left pixel coordinates of the window in the source raster.
     """
+    # Convert geographic coordinates to pixel (column, row)
     px, py = ~transform * (x, y)
     px, py = int(np.floor(px)), int(np.floor(py))
 
+    # Window centred on (px, py): half pixels in each direction
     half = window_size // 2
     row_start = py - half
     row_stop = py + half + 1
     col_start = px - half
     col_stop = px + half + 1
 
+    # Pre-fill with -1 so any region outside the raster extent is padded
     subset = torch.full((window_size, window_size), -1.0, dtype=raster_tensor.dtype)
 
+    # Clamp source indices to the valid raster extent
     vr0 = max(0, row_start)
     vr1 = min(raster_tensor.shape[0], row_stop)
     vc0 = max(0, col_start)
     vc1 = min(raster_tensor.shape[1], col_stop)
 
+    # Corresponding destination indices in the output window
     sr0 = vr0 - row_start
     sr1 = sr0 + (vr1 - vr0)
     sc0 = vc0 - col_start
@@ -110,6 +115,7 @@ def subset_raster_all_bands_torch(
     col_start, row_start:
         Top-left pixel coordinates of the window in the source raster.
     """
+    # Convert geographic coordinates to pixel (column, row)
     px, py = ~transform * (x, y)
     px, py = int(np.floor(px)), int(np.floor(py))
 
@@ -119,11 +125,13 @@ def subset_raster_all_bands_torch(
     col_start = px - half
     col_stop = px + half + 1
 
+    # Pre-fill all bands with -1 padding; only the valid region is overwritten
     n_bands = raster_tensor.shape[0]
     subset = torch.full(
         (n_bands, window_size, window_size), -1.0, dtype=raster_tensor.dtype
     )
 
+    # Source indices (clamped to raster extent) and destination indices in subset
     vr0 = max(0, row_start)
     vr1 = min(raster_tensor.shape[1], row_stop)
     vc0 = max(0, col_start)
@@ -165,6 +173,7 @@ def subset_raster_with_padding_npy(
     col_start, row_start:
         Top-left pixel coordinates of the window in the source raster.
     """
+    # Convert geographic coordinates to pixel (column, row)
     px, py = ~transform * (x, y)
     px, py = int(np.floor(px)), int(np.floor(py))
 
@@ -174,8 +183,10 @@ def subset_raster_with_padding_npy(
     col_start = px - half
     col_stop = px + half + 1
 
+    # Pre-fill with -1 padding; valid region overwritten below
     subset = np.full((window_size, window_size), -1.0, dtype=raster_npy.dtype)
 
+    # Source indices clamped to array bounds; destination offsets computed accordingly
     vr0 = max(0, row_start)
     vr1 = min(raster_npy.shape[0], row_stop)
     vc0 = max(0, col_start)
@@ -226,15 +237,19 @@ def subset_layer_vectorized(
 
     if layer_data.ndim == 2:
         height, width = layer_data.shape
+        # Pre-fill with -1 padding; only the in-bounds region is overwritten
         subset = np.full((window_size, window_size), -1.0, dtype=layer_data.dtype)
+        # Clamp source rows/cols to array bounds
         vr0, vr1 = max(0, row_start), min(height, row_stop)
         vc0, vc1 = max(0, col_start), min(width, col_stop)
         if vr0 < vr1 and vc0 < vc1:
+            # Destination offsets in the output window
             sr0 = vr0 - row_start
             sc0 = vc0 - col_start
             sr1, sc1 = sr0 + (vr1 - vr0), sc0 + (vc1 - vc0)
             subset[sr0:sr1, sc0:sc1] = layer_data[vr0:vr1, vc0:vc1]
     else:
+        # Multi-band path: same clipping logic applied across all bands
         n_bands, height, width = layer_data.shape
         subset = np.full(
             (n_bands, window_size, window_size), -1.0, dtype=layer_data.dtype
@@ -247,6 +262,7 @@ def subset_layer_vectorized(
             sr1, sc1 = sr0 + (vr1 - vr0), sc0 + (vc1 - vc0)
             subset[:, sr0:sr1, sc0:sc1] = layer_data[:, vr0:vr1, vc0:vc1]
 
+    # .copy() detaches the NumPy view before converting to a tensor
     return torch.from_numpy(subset.copy()).float(), col_start, row_start
 
 

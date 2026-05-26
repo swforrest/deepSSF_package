@@ -110,6 +110,8 @@ def load_s2_data(s2_dir: str) -> tuple[dict[str, np.ndarray], Any]:
             data = src.read()
             n_nan = np.isnan(data).sum()
             print(f"    NaN values: {n_nan} ({n_nan / data.size:.4%})")
+            # Sentinel-2 DNs are stored as integers ×10 000; divide to get
+            # surface reflectance in [0, 1] (approximately).
             data = np.nan_to_num(data, nan=0) / 10_000.0
             s2_data_dict[date_str] = data
             raster_transform = src.transform
@@ -148,6 +150,7 @@ def load_environmental_layers(
     layers: dict = {}
     raster_transform: Any = None
 
+    # S2 directory gets its own loader that handles multi-date file naming
     if "s2_dir" in layer_paths:
         layers["s2"], raster_transform = load_s2_data(layer_paths["s2_dir"])
 
@@ -161,13 +164,17 @@ def load_environmental_layers(
                 data = np.nan_to_num(data, nan=0)
                 lo, hi = float(np.nanmin(data)), float(np.nanmax(data))
                 print(f"Layer '{name}': min={lo}, max={hi} → scaled to [0, 1]")
+                # Min-max scale to [0, 1] so all static layers share the same range
                 data = (data - lo) / hi
+                # Drop the band dimension for single-band TIFFs → [H, W]
                 if data.shape[0] == 1:
                     data = data[0]
                 layers[name] = data
                 if raster_transform is None:
                     raster_transform = src.transform
         else:
+            # .npy files loaded with memory-mapping to avoid loading the full
+            # array into RAM before the crop step in __getitem__
             layers[name] = np.load(path, mmap_mode="r")
 
     if raster_transform is None:
@@ -355,10 +362,13 @@ class MovementDataset(Dataset):
         )
 
         cols = scalar_cols if scalar_cols is not None else _DEFAULT_SCALAR_COLS
+        # Pre-extract scalar columns as a tensor: indexed by row in __getitem__
         self.scalar_to_grid_data = torch.from_numpy(
             movement_df[cols].values
         ).float()
 
+        # Shift bearing by one row so each step receives the *previous* bearing
+        # as input (directional persistence). Row 0 gets 0 (no prior heading).
         bearing_raw: pd.Series = (
             movement_df[bearing_col].astype(float).shift(1).fillna(0)
         )
@@ -366,6 +376,8 @@ class MovementDataset(Dataset):
             bearing_raw.to_numpy()
         ).unsqueeze(1).float()
 
+        # Pre-compute pixel coordinates for every departure and arrival location
+        # so __getitem__ avoids per-sample geo-transform lookups at batch time.
         self.x1y1_pixel_coords: list[tuple[int, int]] = []
         self.x2y2_pixel_coords_raw: list[tuple[int, int]] = []
         self.s2_months: list[str] = []
@@ -385,6 +397,7 @@ class MovementDataset(Dataset):
                 (int(np.floor(px2)), int(np.floor(py2)))
             )
 
+            # Store 'YYYY_MM' key for selecting the correct S2 monthly composite
             dt = datetime.fromisoformat(str(row["t1_"]).replace("Z", "+00:00"))
             self.s2_months.append(f"{dt.year}_{dt.month:02d}")
 
@@ -401,7 +414,10 @@ class MovementDataset(Dataset):
         cropped_layers = []
         col_start = row_start = 0
 
+        # S2 is processed first so col_start / row_start reflect its crop origin,
+        # which is used below to compute the next-step pixel in local coordinates.
         if "s2" in self.environmental_layers:
+            # Select the best-matching monthly composite (with year ±1 fallback)
             s2_arr = _select_s2_month(
                 self.environmental_layers["s2"], selected_month
             )
@@ -416,16 +432,22 @@ class MovementDataset(Dataset):
             crop, col_start, row_start = subset_layer_vectorized(
                 layer_data, px1, py1, self.window_size
             )
+            # Ensure 2-D layers become [1, H, W] so all layers have a channel dim
             if crop.ndim == 2:
                 crop = crop.unsqueeze(0)
             cropped_layers.append(crop)
 
+        # Concatenate all channel groups into a single [C, H, W] tensor
         spatial_data = (
             torch.cat(cropped_layers, dim=0)
             if len(cropped_layers) > 1
             else cropped_layers[0]
         )
 
+        # Express the arrival pixel in the coordinate frame of the local crop.
+        # The loss function indexes into the [H, W] probability surface using these
+        # values, so they must be in [0, window_size). Steps outside that range
+        # will raise an out-of-bounds error — call filter_steps_by_window first.
         next_step_pixel = (px2 - col_start, py2 - row_start)
 
         return (
@@ -490,19 +512,27 @@ def prepare_movement_df(
         if n < 2:
             continue
 
+        # Each consecutive pair of fixes defines one step: dep → arr
         dep = g.iloc[:-1]       # departure rows (all but last)
         arr = g.iloc[1:]        # arrival rows  (all but first)
 
+        # Parse timestamps with UTC to handle mixed timezone strings
         times_dep = pd.to_datetime(dep[time_col].values, utc=True)
         times_arr = pd.to_datetime(arr[time_col].values, utc=True)
 
+        # Raw displacements in CRS units (e.g. metres for a projected CRS)
         dx = arr[x_col].values - dep[x_col].values
         dy = arr[y_col].values - dep[y_col].values
 
+        # Fractional hour (e.g. 14.5 = 14:30) and integer day-of-year at departure
         hours = times_dep.hour + times_dep.minute / 60.0
         ydays = times_dep.day_of_year.astype(float)
 
+        # Step bearing in radians: 0 = east, π/2 = north (standard arctan2 convention)
         bearings = np.arctan2(dy, dx)
+        # Previous bearing: row 0 has no predecessor so it is set to 0 (east).
+        # MovementDataset shifts this column by one row again, so in practice
+        # the model never sees a meaningful bearing for the very first step.
         bearing_tm1 = np.empty_like(bearings)
         bearing_tm1[0] = 0.0
         bearing_tm1[1:] = bearings[:-1]
@@ -563,6 +593,9 @@ def filter_steps_by_window(
     pd.DataFrame
         Filtered copy of *df* with out-of-range steps removed.
     """
+    # The crop is centred on the departure pixel; the farthest reachable pixel
+    # in each direction is (window_size - 1) / 2 pixels = half_extent metres.
+    # Steps beyond this cannot be indexed within the [H, W] probability surface.
     half_extent = (window_size - 1) * pixel_size / 2
     mask = (
         (df["dx"].abs() < half_extent) &
@@ -633,6 +666,8 @@ def make_dataloaders(
     if layer_paths is None:
         raise ValueError("layer_paths is required.")
     source_df = df if df is not None else pd.read_csv(csv_path)
+    # prepare=True is a convenience flag for raw CSVs; for finer control
+    # (e.g. calling filter_steps_by_window between steps) pass a pre-processed df
     if prepare:
         source_df = prepare_movement_df(source_df)
     dataset = MovementDataset(
@@ -643,12 +678,14 @@ def make_dataloaders(
         bearing_col=bearing_col,
     )
 
+    # Remainder after train + val goes to the test set
     test_split = 1.0 - train_split - val_split
     train_ds, val_ds, test_ds = torch.utils.data.random_split(
         dataset, [train_split, val_split, test_split]
     )
 
     dl_kwargs = dict(batch_size=batch_size, num_workers=num_workers)
+    # Training set is shuffled each epoch; val/test are not
     dl_train = DataLoader(train_ds, shuffle=True, **dl_kwargs)
     dl_val   = DataLoader(val_ds,   shuffle=False, **dl_kwargs)
     dl_test  = DataLoader(test_ds,  shuffle=False, **dl_kwargs)

@@ -89,6 +89,7 @@ def validate_next_step_probs(
     _month_fn = month_index_fn if month_index_fn is not None else _day_to_s2_month
 
     n = len(movement_df)
+    # Initialise all probabilities to zero; row 0 is never updated (no prev bearing)
     habitat_probs = np.zeros(n)
     move_probs = np.zeros(n)
     next_step_probs = np.zeros(n)
@@ -97,6 +98,7 @@ def validate_next_step_probs(
     device = next(model.parameters()).device
 
     with torch.no_grad():
+        # Start at row 1: row 0 has no previous bearing, so its prob stays 0.0
         for i in range(1, n):
             sample = movement_df.iloc[i]
 
@@ -106,12 +108,12 @@ def validate_next_step_probs(
             # Geographic → pixel coords for the next step
             px2, py2 = ~transform * (x2_geo, y2_geo)  # type: ignore[operator]
 
-            # Month lookup
+            # Select the correct monthly landscape based on the departure date
             yday = float(sample[yday_col])
             month_index = _month_fn(yday)
             landscape_rasters = get_landscape(month_index)
 
-            # Crop spatial patches at current location
+            # Crop a spatial patch at the departure location for each raster channel
             results = [
                 subset_raster_with_padding_torch(
                     rt, x=x, y=y, window_size=window_size, transform=transform  # type: ignore[arg-type]
@@ -119,9 +121,10 @@ def validate_next_step_probs(
                 for rt in landscape_rasters
             ]
             subset_tensors = [r[0] for r in results]
-            origin_xs = [r[1] for r in results]
-            origin_ys = [r[2] for r in results]
+            origin_xs = [r[1] for r in results]  # top-left column of each patch
+            origin_ys = [r[2] for r in results]  # top-left row of each patch
 
+            # Stack channels → [1, C, H, W]
             x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0).to(device)
 
             # Scalar inputs: [1, 4]
@@ -136,26 +139,28 @@ def validate_next_step_probs(
 
             out = model((x1, scalars, bearing))
 
-            # Extract log-prob surfaces [H, W]
+            # Extract log-prob surfaces [H, W] (already log-normalised by the model)
             hab_log = out[0, :, :, 0].detach().cpu().numpy()
             move_log = out[0, :, :, 1].detach().cpu().numpy()
 
-            # Next step in local crop coordinates
+            # Convert the observed next-step global pixel to local crop coordinates
             px2_local = int(round(float(px2) - origin_xs[0]))
             py2_local = int(round(float(py2) - origin_ys[0]))
 
+            # If the next step falls outside the crop window, record NaN and skip
             if not (0 <= px2_local < window_size and 0 <= py2_local < window_size):
                 habitat_probs[i] = np.nan
                 move_probs[i] = np.nan
                 next_step_probs[i] = np.nan
                 continue
 
-            # Habitat prob (already normalised log-prob → exp)
+            # Convert log-probs to probs; renormalise the joint surface before indexing
             hab_exp = np.exp(hab_log)
             move_exp = np.exp(move_log)
             step_exp = np.exp(hab_log + move_log)
             step_exp_norm = step_exp / np.sum(step_exp)
 
+            # Record the probability assigned to the observed next-step pixel
             habitat_probs[i] = hab_exp[py2_local, px2_local]
             move_probs[i] = move_exp[py2_local, px2_local]
             next_step_probs[i] = step_exp_norm[py2_local, px2_local]

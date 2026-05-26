@@ -56,7 +56,9 @@ class Conv2d_block_spatial(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # conv stack collapses C channels → 1; squeeze removes singleton → [B, H, W]
         out = self.conv2d(x).squeeze(dim=1)
+        # subtract log-sum-exp so the surface integrates to 1 in probability space
         return out - torch.logsumexp(out, dim=(1, 2), keepdim=True)
 
 
@@ -134,17 +136,24 @@ class Params_to_Grid_Block(nn.Module):
         self.device     = params.device
 
         center = self.image_dim // 2
+        # Build pixel-index grids: y_idx increases downward, x_idx increases rightward
         y_idx, x_idx = np.indices((self.image_dim, self.image_dim))
+        # Euclidean distance from the centre pixel, in CRS units (e.g. metres)
         dist = np.sqrt((self.pixel_size * (x_idx - center)) ** 2 +
                        (self.pixel_size * (y_idx - center)) ** 2)
+        # Centre pixel has distance 0 → log(0) is undefined in the Gamma PDF.
+        # Replace with E[r] for a uniform distribution within one pixel cell.
         dist[center, center] = 0.3826 * self.pixel_size  # E[r] within centre pixel
 
         self.distance_layer = torch.from_numpy(dist).float()
+        # arctan2 with (center - y, x - center) gives bearing measured from east,
+        # increasing counter-clockwise — consistent with the movement bearing convention
         self.bearing_layer = torch.from_numpy(
             np.arctan2(center - y_idx, x_idx - center)
         ).float()
 
     def _gamma_log(self, r, shape, scale):
+        # Log-PDF of Gamma(shape, scale) evaluated at each pixel distance r
         shape, scale = shape.to(r.device), scale.to(r.device)
         return (
             -torch.lgamma(shape) - shape * torch.log(scale)
@@ -152,6 +161,7 @@ class Params_to_Grid_Block(nn.Module):
         )
 
     def _vonmises_log(self, theta, kappa, mu):
+        # Log-PDF of von Mises: log p(θ) = kappa*cos(θ-mu) - log(2π*I₀(kappa))
         kappa, mu = kappa.to(theta.device), mu.to(theta.device)
         # torch.special.i0 is unsupported on MPS; compute on CPU and move back
         i0_val = torch.special.i0(kappa.cpu()).to(kappa.device)
@@ -159,30 +169,41 @@ class Params_to_Grid_Block(nn.Module):
         return kappa * torch.cos(theta - mu) - log_norm
 
     def _expand(self, scalar, dim):
+        # Broadcast a per-sample scalar (shape [B]) into a [B, dim, dim] spatial grid
+        # so each pixel in the grid carries the same value for that batch item.
         return scalar.unsqueeze(0).unsqueeze(0).repeat(dim, dim, 1).permute(2, 0, 1)
 
     def forward(self, x: torch.Tensor, bearing: torch.Tensor) -> torch.Tensor:
         D = self.image_dim
         E = self._expand
 
-        gs1 = E(torch.exp(x[:, 0]), D)
-        gc1 = E(torch.exp(x[:, 1]), D)
-        gw1 = E(torch.exp(x[:, 2]), D)
-        gs2 = E(torch.exp(x[:, 3]), D)
-        gc2 = E(torch.exp(x[:, 4]) * 500, D)
-        gw2 = E(torch.exp(x[:, 5]), D)
+        # --- Step-length kernel: 2-component Gamma mixture ---
+        # FCN outputs raw scalars; exp() ensures shape/scale/weight are positive.
+        # gc2 scaled ×500 so the second component spans longer distances (heavy tail).
+        gs1 = E(torch.exp(x[:, 0]), D)   # shape of Gamma component 1
+        gc1 = E(torch.exp(x[:, 1]), D)   # scale of Gamma component 1
+        gw1 = E(torch.exp(x[:, 2]), D)   # unnormalised weight of component 1
+        gs2 = E(torch.exp(x[:, 3]), D)   # shape of Gamma component 2
+        gc2 = E(torch.exp(x[:, 4]) * 500, D)  # scale of Gamma component 2 (long-range)
+        gw2 = E(torch.exp(x[:, 5]), D)   # unnormalised weight of component 2
+        # Softmax normalises the two weights so they sum to 1 across the mixture
         gw  = torch.nn.functional.softmax(torch.stack([gw1, gw2], dim=0), dim=0)
         gw1, gw2 = gw[0], gw[1]
 
         dist = self.distance_layer.to(x.device)
         gl1 = self._gamma_log(dist, gs1, gc1)
         gl2 = self._gamma_log(dist, gs2, gc2)
+        # Log-sum-exp trick: subtract max before exp to avoid under/overflow
         lse = torch.max(gl1, gl2)
         gamma_grid = lse + torch.log(
             gw1 * torch.exp(gl1 - lse) + gw2 * torch.exp(gl2 - lse)
         )
 
+        # --- Turning-angle kernel: 2-component von Mises mixture ---
         brg = self.bearing_layer.to(x.device)
+        # mu is learned as an offset from the previous bearing so the animal can
+        # encode forward persistence or a preferred turn relative to its last heading.
+        # mu is an offset from prev bearing; k is concentration; vw is mixture weight
         mu1 = E(x[:, 6]  + bearing[:, 0], D)
         k1  = E(torch.exp(x[:, 7]), D)
         vw1 = E(torch.exp(x[:, 8]), D)
@@ -199,6 +220,7 @@ class Params_to_Grid_Block(nn.Module):
             vw1 * torch.exp(vl1 - lse) + vw2 * torch.exp(vl2 - lse)
         )
 
+        # Joint log-density: add step-length and turning-angle log-probs, then normalise
         grid = gamma_grid + vm_grid
         return grid - torch.logsumexp(grid, dim=(1, 2), keepdim=True)
 
@@ -273,14 +295,20 @@ class ConvJointModel(nn.Module):
 
     def forward(self, x: tuple) -> torch.Tensor:
         spatial, scalars, bearing = x[0], x[1], x[2]
+        # Broadcast each scalar to a constant spatial map and concatenate with
+        # the raster channels so the CNN sees both spatial and temporal context.
         scalar_maps  = self.scalar_grid_output(scalars)
         all_spatial  = torch.cat([spatial, scalar_maps], dim=1)
 
+        # Habitat branch: CNN → log-normalised [B, H, W] surface
         habitat_out  = self.conv_habitat(all_spatial)
+        # Movement branch: CNN → flatten → FCN → 12 parameters → [B, H, W] surface
         move_conv    = self.conv_movement(all_spatial)
         move_params  = self.fcn_movement_all(move_conv)
         move_out     = self.movement_grid_output(move_params, bearing)
 
+        # Stack as last dim: [..., 0] = habitat log-prob, [..., 1] = movement log-prob.
+        # Summing over this dim gives the joint log-density used by the loss function.
         return torch.stack((habitat_out, move_out), dim=-1)
 
 

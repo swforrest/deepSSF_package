@@ -76,6 +76,7 @@ class negativeLogLikeLoss(nn.Module):
         ``(total_loss, habitat_loss, movement_loss)`` — each scalar
         (mean/median/sum) or 1-D [B] tensor (none).
         """
+        # Unpack the two log-probability surfaces from the joint model output
         hab_surface  = predict[:, :, :, 0]
         move_surface = predict[:, :, :, 1]
 
@@ -84,16 +85,22 @@ class negativeLogLikeLoss(nn.Module):
         if torch.isnan(move_surface).any():
             print("NaNs detected in movement_probability_surface")
 
+        # When freeze_movement=True only habitat drives the combined loss; the
+        # movement sub-network receives no gradient on this pass.
         pred_prod = hab_surface if self.freeze_movement else hab_surface + move_surface
 
         if torch.isnan(pred_prod).any():
             print("NaNs detected in pred_prod")
 
+        # Re-normalise the combined log surface so it integrates to 1 in prob space
         pred_prod = pred_prod - torch.logsumexp(pred_prod, dim=(1, 2), keepdim=True)
 
         px2, py2 = target
+        # batch_idx selects one row per sample; together with py2/px2 this indexes
+        # the log-probability at the observed next-step pixel for each batch item.
         batch_idx = torch.arange(len(px2), device=predict.device)
 
+        # NLL is the negative log-prob at the observed location (lower = better fit)
         nll      = -pred_prod[batch_idx, py2, px2]
         hab_loss = -hab_surface[batch_idx, py2, px2]
         mov_loss = -move_surface[batch_idx, py2, px2]
@@ -148,12 +155,15 @@ class EarlyStopping:
         self.val_loss_min = float("inf")
 
     def __call__(self, val_loss: float, model: nn.Module) -> None:
+        # Negate loss so higher score = better (allows simple "did we improve?" check)
         score = -val_loss
 
         if self.best_score is None:
+            # First epoch — always save
             self.best_score = score
             self._save(val_loss, model)
         elif score < self.best_score + self.delta:
+            # No meaningful improvement: increment patience counter
             self.counter += 1
             self.trace_func(
                 f"EarlyStopping counter: {self.counter} out of {self.patience}"
@@ -161,6 +171,7 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
         else:
+            # New best: save checkpoint and reset counter
             self.best_score = score
             self._save(val_loss, model)
             self.counter = 0
@@ -223,6 +234,7 @@ def train_loop(
     epoch_loss  = 0.0
 
     for batch, (x1, x2, x3, y, _) in enumerate(dataloader_train):
+        # Move batch to the active compute device (MPS / CUDA / CPU)
         x1 = x1.to(device)
         x2 = x2.to(device)
         x3 = x3.to(device)
@@ -242,8 +254,10 @@ def train_loop(
 
             total_loss.backward()
 
-            # Save then zero habitat gradients so the movement optimiser
-            # updates only movement parameters.
+            # The two sub-networks share a single backward pass but are updated
+            # by separate optimisers. To prevent cross-contamination:
+            # 1. Stash habitat gradients and zero them so the movement optimiser
+            #    only updates movement parameters.
             habitat_grads = []
             for param in model.conv_habitat.parameters():
                 g = param.grad.clone() if param.grad is not None else None
@@ -253,8 +267,8 @@ def train_loop(
             if optimiser_movement is not None:
                 optimiser_movement.step()
 
-            # Zero movement-FCN gradients, restore habitat gradients, then
-            # update the habitat sub-network.
+            # 2. Zero movement-FCN gradients, restore habitat gradients, then
+            #    update only the habitat sub-network.
             for param in model.fcn_movement_all.parameters():
                 param.grad = None
             for i, param in enumerate(model.conv_habitat.parameters()):
@@ -396,7 +410,9 @@ def _save_snapshot(
     move_log = out[0, :, :, 1].cpu().numpy()
     step_log = hab_log + move_log
 
-    # Boolean mask: True = cells to remove
+    # Edge pixels within n_conv_layers of the border have seen padded (-1) values
+    # in at least one conv receptive field, making their outputs less reliable.
+    # Mask them out (set to NaN) so they don't distort the snapshot visualisation.
     edge_mask = np.zeros_like(hab_log, dtype=bool)
 
     edge_mask[:, :n_conv_layers] = True
