@@ -1,9 +1,9 @@
 # deepSSF
 
-Deep learning step selection functions for predicting animal movement.
+Predicting animal movement with a deep learning step-selection framework.
 
 This package provides the reusable, installable implementation of the deepSSF
-method. The accompanying paper, tutorials, and reproducibility code live at the
+method in Python. The accompanying paper, tutorials, and reproducibility code live at the
 [deepSSF project site](https://swforrest.github.io/deepSSF/).
 
 ## Installation (pip only)
