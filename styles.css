@@ -1,0 +1,8 @@
+/* Limit the height of *outputs* and make them scrollable */
+.cell-output pre {
+  max-height: 500px;  /* Adjust height as needed */
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  padding: 10px;
+  background-color: #f8f9fa; /* Light gray background */
+}

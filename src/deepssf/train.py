@@ -379,7 +379,7 @@ def make_optimisers(
 
 def _save_snapshot(
     model: nn.Module,
-    n_conv_layers: int,
+    image_trim_pixels: int,
     window_size: int,
     dl_val,
     snapshot_item: int,
@@ -415,10 +415,10 @@ def _save_snapshot(
     # Mask them out (set to NaN) so they don't distort the snapshot visualisation.
     edge_mask = np.zeros_like(hab_log, dtype=bool)
 
-    edge_mask[:, :n_conv_layers] = True
-    edge_mask[:, window_size - n_conv_layers:] = True
-    edge_mask[:n_conv_layers, :] = True
-    edge_mask[window_size - n_conv_layers:, :] = True
+    edge_mask[:, :image_trim_pixels] = True
+    edge_mask[:, window_size - image_trim_pixels:] = True
+    edge_mask[:image_trim_pixels, :] = True
+    edge_mask[window_size - image_trim_pixels:, :] = True
 
     # Apply mask
     hab_log_plot = hab_log.copy()
@@ -461,7 +461,7 @@ def _save_snapshot(
 
 def fit(
     model: nn.Module,
-    n_conv_layers: int,
+    image_trim_pixels: int,
     window_size: int,
     dl_train,
     dl_val,
@@ -562,7 +562,7 @@ def fit(
 
         if snapshot_dir is not None:
             _save_snapshot(
-                model, n_conv_layers, window_size, 
+                model,  image_trim_pixels, window_size, 
                 dl_val, snapshot_item, epoch,
                 history, snapshot_dir, device,
             )

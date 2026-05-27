@@ -6,7 +6,9 @@ This package provides the reusable, installable implementation of the deepSSF
 method in Python. Accompanying tutorials and example code live at the
 [deepSSF project site](https://swforrest.github.io/deepSSF/).
 
-![deepSSF Python and R packages](icons/both_icons.png)
+![](icons/both_icons.png)
+
+The Python package can be viewed on [PyPi](https://pypi.org/project/deepSSF/).
 
 The paper can be found at:
 
