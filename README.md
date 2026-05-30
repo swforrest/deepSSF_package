@@ -2,9 +2,11 @@
 
 Predicting animal movement with a deep learning step-selection framework.
 
-This package provides the reusable, installable implementation of the deepSSF
-method in Python. Accompanying tutorials and example code live at the
-[deepSSF project site](https://swforrest.github.io/deepSSF/).
+This package provides the installable implementation of the deepSSF 
+approach in Python. Accompanying tutorials and example code live at the
+[deepSSF project site](https://swforrest.github.io/deepSSF/). 
+
+There is a package walkthrough script that outlines an implementation of the functions with some example GPS tracking data (a single water buffalo) and two spatial covariates (NDVI and slope). You can access the script as a Jupyter notebook or as a knitted html in the [examples](https://github.com/swforrest/deepSSF_package/tree/main/examples) directory. The example script will not download with the package installation, but the GPS and spatial datasets will.
 
 ![](icons/both_icons.png)
 
