@@ -416,9 +416,7 @@ def test_simulate_trajectory_dataframe_shape(small_params):
     import rasterio.transform
 
     from deepssf.model import ConvJointModel, ModelParams
-    from deepssf.simulate import simulate_trajectory
-
-    from deepssf.simulate import make_simulation_inputs
+    from deepssf.simulate import make_simulation_inputs, simulate_trajectory
 
     dim = small_params.image_dim
     for _ in range(3):
