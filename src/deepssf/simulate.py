@@ -80,7 +80,13 @@ def simulate_next_step(
     x_loc: float,
     y_loc: float,
     transform: object,
-) -> tuple[float, float, torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
+) -> tuple[float, 
+           float, 
+        #    torch.Tensor, 
+        #    torch.Tensor, 
+        #    torch.Tensor, 
+           int, 
+           int]:
     """Sample the next location from the model's predicted step distribution.
 
     Parameters
@@ -106,9 +112,9 @@ def simulate_next_step(
     -------
     new_x, new_y : float
         Sampled geographic coordinates (with sub-pixel jitter applied).
-    hab_log_prob : Tensor, shape (H, W)
-    move_log_prob : Tensor, shape (H, W)
-    step_log_prob : Tensor, shape (H, W)  (masked; NaN outside raster extent)
+    # hab_log_prob : Tensor, shape (H, W)
+    # move_log_prob : Tensor, shape (H, W)
+    # step_log_prob : Tensor, shape (H, W)  (masked; NaN outside raster extent)
     px, py : int
         Sampled pixel column and row within the local crop.
     """
@@ -172,9 +178,9 @@ def simulate_next_step(
     return (
         float(new_x) + jitter_x,
         float(new_y) + jitter_y,
-        hab_log_prob.squeeze().cpu(),
-        move_log_prob.squeeze().cpu(),
-        step_log_prob.squeeze().cpu(),
+        # hab_log_prob.squeeze().cpu(),
+        # move_log_prob.squeeze().cpu(),
+        # step_log_prob.squeeze().cpu(),
         int(sampled_col),
         int(sampled_row),
     )
@@ -229,7 +235,14 @@ def simulate_trajectory(
     Returns
     -------
     pd.DataFrame with columns:
-        x, y, hour, yday, month_index, hab_log_prob, move_log_prob, step_log_prob
+        x, 
+        y, 
+        hour, 
+        yday, 
+        month_index, 
+        # hab_log_prob, 
+        # move_log_prob, 
+        # step_log_prob
     """
     model.eval()
     # Pre-compute cyclic time encodings for every step up front
@@ -264,7 +277,7 @@ def simulate_trajectory(
             # Wrap precomputed scalar row as a [1, 5] tensor for the model
             scalars_to_grid = torch.tensor(x2_full[i], dtype=torch.float32).unsqueeze(0)
 
-            new_x, new_y, hab_lp, move_lp, step_lp, px, py = simulate_next_step(
+            new_x, new_y, px, py = simulate_next_step( #hab_lp, move_lp, step_lp, 
                 model,
                 landscape_rasters,
                 scalars_to_grid,
@@ -282,9 +295,9 @@ def simulate_trajectory(
                     "hour": float(hour_t2[i]),
                     "yday": yday,
                     "month_index": month_index,
-                    "hab_log_prob": hab_lp.numpy(),
-                    "move_log_prob": move_lp.numpy(),
-                    "step_log_prob": step_lp.numpy(),
+                    # "hab_log_prob": hab_lp.numpy(),
+                    # "move_log_prob": move_lp.numpy(),
+                    # "step_log_prob": step_lp.numpy(),
                 }
             )
 
