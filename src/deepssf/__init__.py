@@ -7,7 +7,7 @@ expose the things you want people to rely on. Internal helpers stay private.
 
 # Single source of truth for the version. hatchling reads this string at build
 # time (see pyproject.toml [tool.hatch.version]). Bump it when you release.
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 from deepssf.data import (
     MovementDataset,
