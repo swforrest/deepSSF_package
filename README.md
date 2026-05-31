@@ -51,14 +51,6 @@ Miniconda are towards the bottom of the page - the links at the top are
 for the Anaconda Distribution, which has thousands of pacakges and is
 not necessary to get things up and running initially.
 
-- **Windows**: use the **Anaconda Prompt** for all subsequent commands, and
-  choose an install path that contains **no spaces** (e.g. `C:\miniconda3`).
-- **macOS / Linux**: a normal terminal works fine.
-
-> **Miniforge alternative**: if you prefer to avoid Anaconda's default channel
-> entirely, [Miniforge](https://github.com/conda-forge/miniforge) is a
-> drop-in replacement that ships with `conda-forge` as the only channel.
-
 ### 1b. (Optional) Install an IDE (such as VSCode)
 
 Once you have Python and Miniconda installed, you will likely want an interface 
@@ -68,7 +60,8 @@ I use Visual Studio Code, or ‘VS Code’ as I find the functionality similar t
 
 You can download VSCode from here: [https://code.visualstudio.com/](https://code.visualstudio.com/).
 
-For the commands below, you can use the Terminal in VScode, or the Terminal/Command Line in Windows or macOS.
+For the commands below, you can use the Terminal directly in VScode (Terminal > New Terminal), 
+or the Terminal/Command Line in Windows or macOS.
 
 ### 2. Create the environment
 
