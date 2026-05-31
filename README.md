@@ -44,12 +44,17 @@ print(deepssf.__version__)
 If you are coming from R, think of a conda environment the way you think of
 an `renv` project library — it is a self-contained Python installation that
 keeps this project's packages separate from everything else on your computer.
-The steps below create one for deepssf and should take about five minutes.
+The steps below create one for deepSSF and should take about five minutes.
 
 ### 1. Install Miniconda (once, system-wide)
 
 Download and run the installer from the
 [official Miniconda page](https://docs.anaconda.com/miniconda/).
+
+If you click 'Download' towards the top right, the links to download 
+Miniconda are towards the bottom of the page - the links at the top are
+for the Anaconda Distribution, which has thousands of pacakges and is
+not necessary to get things up and running initially.
 
 - **Windows**: use the **Anaconda Prompt** for all subsequent commands, and
   choose an install path that contains **no spaces** (e.g. `C:\miniconda3`).
@@ -62,7 +67,7 @@ Download and run the installer from the
 ### 2. Create the environment
 
 ```bash
-git clone https://github.com/swforrest/deepssf
+git clone https://github.com/swforrest/deepssf_package
 cd deepssf
 conda env create -f environment.yml
 ```

@@ -371,7 +371,7 @@ def test_make_simulation_inputs_hour_wraps():
 
 
 def test_simulate_next_step_returns_coords_and_tensors(small_params):
-    """simulate_next_step returns new coordinates and three log-prob tensors."""
+    """simulate_next_step returns new coordinates."""
     import math
 
     import rasterio.transform
@@ -396,15 +396,12 @@ def test_simulate_next_step_returns_coords_and_tensors(small_params):
     scalars = torch.zeros(1, 4)
     bearing = torch.zeros(1, 1)
 
-    new_x, new_y, hab, move, step, px, py = simulate_next_step(
+    new_x, new_y, px, py = simulate_next_step(
         model, rasters, scalars, bearing, window_size=W,
         x_loc=W * 25 / 2, y_loc=W * 25 / 2, transform=transform,
     )
     assert isinstance(new_x, float)
     assert isinstance(new_y, float)
-    assert hab.shape == (W, W)
-    assert move.shape == (W, W)
-    assert step.shape == (W, W)
     assert 0 <= px < W
     assert 0 <= py < W
 
@@ -676,11 +673,19 @@ def test_prepare_movement_df_has_dx_dy():
 
     assert "dx" in df.columns
     assert "dy" in df.columns
-    assert np.isfinite(df["dx"].values).all()
-    assert np.isfinite(df["dy"].values).all()
-    # dx = x2_ - x1_, dy = y2_ - y1_
-    np.testing.assert_allclose(df["dx"].values, df["x2_"].values - df["x1_"].values)
-    np.testing.assert_allclose(df["dy"].values, df["y2_"].values - df["y1_"].values)
+
+    dx = df["dx"].to_numpy(dtype=float)
+    dy = df["dy"].to_numpy(dtype=float)
+    x1 = df["x1_"].to_numpy(dtype=float)
+    x2 = df["x2_"].to_numpy(dtype=float)
+    y1 = df["y1_"].to_numpy(dtype=float)
+    y2 = df["y2_"].to_numpy(dtype=float)
+
+    assert np.isfinite(dx).all()
+    assert np.isfinite(dy).all()
+
+    np.testing.assert_allclose(dx, x2 - x1)
+    np.testing.assert_allclose(dy, y2 - y1)
 
 
 def test_filter_steps_by_window_removes_large_steps():
@@ -775,7 +780,7 @@ def test_fit_returns_loss_history(small_params):
     optimisers, schedulers = make_optimisers(model)
     history = fit(
         model,
-        n_conv_layers=3,       # number of conv layers (used only for snapshots)
+        image_trim_pixels=3,       # number of conv layers (used only for snapshots)
         window_size=H,         # spatial crop size (used only for snapshots)
         dl_train=_DL(),
         dl_val=_DL(),
