@@ -18,7 +18,7 @@ Forrest, S. W., Pagendam, D., Hassan, C., Potts, J. R., Drovandi, C., Bode, M., 
 
 ## Installation (pip only)
  
-If you manage your own Python environment, install deepSSF with:
+If you already have a Python environment that you want to install the package into, install deepSSF with:
 
 ```bash
 pip install deepssf
@@ -41,11 +41,6 @@ print(deepssf.__version__)
 
 ## Setting up (for users new to Python)
 
-If you are coming from R, think of a conda environment the way you think of
-an `renv` project library — it is a self-contained Python installation that
-keeps this project's packages separate from everything else on your computer.
-The steps below create one for deepSSF and should take about five minutes.
-
 ### 1. Install Miniconda (once, system-wide)
 
 Download and run the installer from the
@@ -64,7 +59,25 @@ not necessary to get things up and running initially.
 > entirely, [Miniforge](https://github.com/conda-forge/miniforge) is a
 > drop-in replacement that ships with `conda-forge` as the only channel.
 
+### 1b. (Optional) Install an IDE (such as VSCode)
+
+Once you have Python and Miniconda installed, you will likely want an interface 
+(‘Integrated Development Environment’, an IDE) to code in (such as RStudio for R users). 
+I use Visual Studio Code, or ‘VS Code’ as I find the functionality similar to RStudio 
+(and as I have become familiar with VS Code I prefer it to RStudio in some ways).
+
+You can download VSCode from here: [https://code.visualstudio.com/](https://code.visualstudio.com/).
+
+For the commands below, you can use the Terminal in VScode, or the Terminal/Command Line in Windows or macOS.
+
 ### 2. Create the environment
+
+Think of a conda environment the way you think of an `renv` project library — 
+it is a self-contained Python installation that
+keeps this project's packages separate from everything else on your computer.
+The steps below create one for deepSSF.
+
+Using the Terminal (which can be in VScode), you can clone the package repository with:
 
 ```bash
 git clone https://github.com/swforrest/deepssf_package
@@ -81,6 +94,8 @@ correct backend at runtime.
 
 ### 3. Activate the environment
 
+Also in the Terminal:
+
 ```bash
 conda activate deepssf
 ```
@@ -96,23 +111,21 @@ register the environment so it appears as a kernel option:
 python -m ipykernel install --user --name deepssf --display-name "Python (deepssf)"
 ```
 
-### 5. Launch Jupyter Lab
-
-```bash
-jupyter lab
-```
-
-Then open `examples/deepssf_train_validate_example.ipynb` to get started.
+Then you can open `examples/deepssf_train_validate_example.ipynb` in VSCode to get started. 
+You can also view the knitted `deepssf_train_validate_example.html` script, which you
+should be able to open in a browser such as Chrome.
 
 ---
 
 ## Documentation
 
-Tutorials and walkthroughs: https://swforrest.github.io/deepSSF/
+There are additional tutorials and walkthroughs to help understand
+deep learning concepts and the deepSSF approach, model and functions at:
+ https://swforrest.github.io/deepSSF/
 
 ## Citation
 
-If you use deepssf in your research, please cite the paper. See `CITATION.cff` or use the citation and link to paper below.
+If you use deepSSF in your research, please cite the paper. See `CITATION.cff` or use the citation and link to paper below.
 
 Forrest, S. W., Pagendam, D., Hassan, C., Potts, J. R., Drovandi, C., Bode, M., & Hoskins, A. J. (2026). **Predicting animal movement with deepSSF : A deep learning step selection framework**. Methods in Ecology and Evolution, 17(2), 371–391. https://doi.org/10.1111/2041-210x.70136
 
