@@ -7,7 +7,7 @@ expose the things you want people to rely on. Internal helpers stay private.
 
 # Single source of truth for the version. hatchling reads this string at build
 # time (see pyproject.toml [tool.hatch.version]). Bump it when you release.
-__version__ = "0.2.3"
+__version__ = "0.3.0"
 
 from deepssf.data import (
     MovementDataset,
@@ -24,8 +24,10 @@ from deepssf.simulate import (
     simulate_trajectory,
 )
 from deepssf.train import (
+    CHECKPOINT_FORMAT,
     EarlyStopping,
     fit,
+    load_checkpoint,
     make_optimisers,
     negativeLogLikeLoss,
     test_loop,
@@ -52,6 +54,8 @@ __all__ = [
     # train
     "negativeLogLikeLoss",
     "EarlyStopping",
+    "load_checkpoint",
+    "CHECKPOINT_FORMAT",
     "train_loop",
     "test_loop",
     "make_optimisers",

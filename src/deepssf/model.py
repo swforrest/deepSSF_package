@@ -123,11 +123,27 @@ class Params_to_Grid_Block(nn.Module):
 
     Models step-length with a 2-component Gamma mixture and turning-angle with
     a 2-component von Mises mixture.  All densities are computed on the
-    log-scale for numerical stability.
+    log-scale, in forms chosen so that no intermediate term can overflow in
+    float32 (see :meth:`_vonmises_log` and :attr:`raw_clamp`).
 
     No change-of-variables Jacobian is applied (polar → Cartesian).
     See :class:`Params_to_Grid_Block_ChV` for the Jacobian-corrected version.
+
+    Notes
+    -----
+    Mixture weights are obtained with ``log_softmax`` over the *raw* FCN
+    outputs (parameters 2, 5, 8 and 11).  Versions ≤ 0.2.3 applied a softmax to
+    ``exp(raw)``, a double exponential that saturated to exactly ``(1, 0)`` by
+    a raw value of ≈ 4.75 — zeroing the weight gradient and putting
+    ``log(0) = -inf`` into the surface.  Checkpoints written by those versions
+    therefore interpret these four parameters differently.
     """
+
+    #: Raw FCN outputs are clamped to ±this before being exponentiated, so
+    #: shape/scale/concentration stay in ``[exp(-10), exp(10)]`` no matter what
+    #: the network emits.  Without it, ``exp`` overflows to ``inf`` at a raw
+    #: value of ≈ 88 and ``lgamma(inf) - inf`` produces NaN.
+    raw_clamp: float = 10.0
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__()
@@ -145,12 +161,25 @@ class Params_to_Grid_Block(nn.Module):
         # Replace with E[r] for a uniform distribution within one pixel cell.
         dist[center, center] = 0.3826 * self.pixel_size  # E[r] within centre pixel
 
-        self.distance_layer = torch.from_numpy(dist).float()
+        # Registered as buffers (not plain attributes) so `model.to(device)`
+        # moves them once, instead of copying them host→device every forward.
+        # persistent=False keeps them out of state_dict: they are constants
+        # derived from image_dim/pixel_size, so storing them would bloat every
+        # checkpoint and break strict loading of checkpoints from earlier versions.
+        self.register_buffer(
+            "distance_layer", torch.from_numpy(dist).float(), persistent=False
+        )
         # arctan2 with (center - y, x - center) gives bearing measured from east,
         # increasing counter-clockwise — consistent with the movement bearing convention
-        self.bearing_layer = torch.from_numpy(
-            np.arctan2(center - y_idx, x_idx - center)
-        ).float()
+        self.register_buffer(
+            "bearing_layer",
+            torch.from_numpy(np.arctan2(center - y_idx, x_idx - center)).float(),
+            persistent=False,
+        )
+
+    def _positive(self, raw: torch.Tensor) -> torch.Tensor:
+        """Map a raw FCN output to a strictly positive, finite parameter."""
+        return torch.exp(raw.clamp(-self.raw_clamp, self.raw_clamp))
 
     def _gamma_log(self, r, shape, scale):
         # Log-PDF of Gamma(shape, scale) evaluated at each pixel distance r
@@ -161,64 +190,76 @@ class Params_to_Grid_Block(nn.Module):
         )
 
     def _vonmises_log(self, theta, kappa, mu):
-        # Log-PDF of von Mises: log p(θ) = kappa*cos(θ-mu) - log(2π*I₀(kappa))
+        """Log-PDF of the von Mises distribution, written to avoid overflow.
+
+        The direct form ``kappa*cos(θ-mu) - log(2π·I₀(kappa))`` breaks down in
+        float32: ``I₀`` grows like ``e^κ/√(2πκ)`` and overflows to ``inf`` at
+        κ ≈ 89, i.e. a raw FCN output of only ``log(89) ≈ 4.5``.  ``log_norm``
+        then becomes ``inf`` and the component log-density ``-inf``; if both
+        mixture components overflow the log-sum-exp evaluates ``-inf - (-inf)``
+        and the whole surface turns to NaN.  Even one overflowing component
+        leaves the forward pass finite but yields NaN gradients, which silently
+        poison the weights.
+
+        Using the exponentially-scaled Bessel function ``i0e(κ) = e^-κ·I₀(κ)``
+        gives ``log I₀(κ) = κ + log(i0e(κ))``, so the ``κ`` terms cancel::
+
+            κ·cos(θ-μ) - log(2π·I₀(κ)) = κ·(cos(θ-μ) - 1) - log(2π) - log(i0e(κ))
+
+        Since ``cos(θ-μ) - 1 ∈ [-2, 0]``, no term can overflow for any κ.
+        ``i0e`` has native CPU, CUDA and MPS kernels, so this also removes the
+        host round-trip the previous implementation needed for MPS.
+        """
         kappa, mu = kappa.to(theta.device), mu.to(theta.device)
-        # torch.special.i0 is unsupported on MPS; compute on CPU and move back
-        i0_val = torch.special.i0(kappa.cpu()).to(kappa.device)
-        log_norm = np.log(2 * torch.pi) + torch.log(i0_val)
-        return kappa * torch.cos(theta - mu) - log_norm
+        return (
+            kappa * (torch.cos(theta - mu) - 1.0)
+            - float(np.log(2 * np.pi))
+            - torch.log(torch.special.i0e(kappa))
+        )
 
     def _expand(self, scalar, dim):
         # Broadcast a per-sample scalar (shape [B]) into a [B, dim, dim] spatial grid
         # so each pixel in the grid carries the same value for that batch item.
-        return scalar.unsqueeze(0).unsqueeze(0).repeat(dim, dim, 1).permute(2, 0, 1)
+        # expand() returns a view rather than materialising the full grid.
+        return scalar.reshape(-1, 1, 1).expand(-1, dim, dim)
 
     def forward(self, x: torch.Tensor, bearing: torch.Tensor) -> torch.Tensor:
         D = self.image_dim
         E = self._expand
 
-        # --- Step-length kernel: 2-component Gamma mixture ---
-        # FCN outputs raw scalars; exp() ensures shape/scale/weight are positive.
-        # gc2 scaled ×500 so the second component spans longer distances (heavy tail).
-        gs1 = E(torch.exp(x[:, 0]), D)   # shape of Gamma component 1
-        gc1 = E(torch.exp(x[:, 1]), D)   # scale of Gamma component 1
-        gw1 = E(torch.exp(x[:, 2]), D)   # unnormalised weight of component 1
-        gs2 = E(torch.exp(x[:, 3]), D)   # shape of Gamma component 2
-        gc2 = E(torch.exp(x[:, 4]) * 500, D)  # scale of Gamma component 2 (long-range)
-        gw2 = E(torch.exp(x[:, 5]), D)   # unnormalised weight of component 2
-        # Softmax normalises the two weights so they sum to 1 across the mixture
-        gw  = torch.nn.functional.softmax(torch.stack([gw1, gw2], dim=0), dim=0)
-        gw1, gw2 = gw[0], gw[1]
+        # Mixture weights: log_softmax over the RAW outputs, giving log-weights
+        # that can be added directly to the component log-densities below.
+        log_gw = torch.log_softmax(torch.stack([x[:, 2], x[:, 5]], dim=0), dim=0)
+        log_vw = torch.log_softmax(torch.stack([x[:, 8], x[:, 11]], dim=0), dim=0)
 
-        dist = self.distance_layer.to(x.device)
-        gl1 = self._gamma_log(dist, gs1, gc1)
-        gl2 = self._gamma_log(dist, gs2, gc2)
-        # Log-sum-exp trick: subtract max before exp to avoid under/overflow
-        lse = torch.max(gl1, gl2)
-        gamma_grid = lse + torch.log(
-            gw1 * torch.exp(gl1 - lse) + gw2 * torch.exp(gl2 - lse)
-        )
+        # --- Step-length kernel: 2-component Gamma mixture ---
+        # FCN outputs raw scalars; _positive() bounds and exponentiates them.
+        # gc2 scaled ×500 so the second component spans longer distances (heavy tail).
+        gs1 = E(self._positive(x[:, 0]), D)   # shape of Gamma component 1
+        gc1 = E(self._positive(x[:, 1]), D)   # scale of Gamma component 1
+        gs2 = E(self._positive(x[:, 3]), D)   # shape of Gamma component 2
+        gc2 = E(self._positive(x[:, 4]) * 500, D)  # scale of component 2 (long-range)
+
+        dist = self.distance_layer
+        gl1 = E(log_gw[0], D) + self._gamma_log(dist, gs1, gc1)
+        gl2 = E(log_gw[1], D) + self._gamma_log(dist, gs2, gc2)
+        # logsumexp over the weighted components: stable for any component value,
+        # including -inf, unlike the manual max/exp/log formulation it replaces.
+        gamma_grid = torch.logsumexp(torch.stack([gl1, gl2], dim=0), dim=0)
 
         # --- Turning-angle kernel: 2-component von Mises mixture ---
-        brg = self.bearing_layer.to(x.device)
+        brg = self.bearing_layer
         # mu is learned as an offset from the previous bearing so the animal can
         # encode forward persistence or a preferred turn relative to its last heading.
-        # mu is an offset from prev bearing; k is concentration; vw is mixture weight
+        # mu is an offset from prev bearing; k is concentration
         mu1 = E(x[:, 6]  + bearing[:, 0], D)
-        k1  = E(torch.exp(x[:, 7]), D)
-        vw1 = E(torch.exp(x[:, 8]), D)
+        k1  = E(self._positive(x[:, 7]), D)
         mu2 = E(x[:, 9]  + bearing[:, 0], D)
-        k2  = E(torch.exp(x[:, 10]), D)
-        vw2 = E(torch.exp(x[:, 11]), D)
-        vw  = torch.nn.functional.softmax(torch.stack([vw1, vw2], dim=0), dim=0)
-        vw1, vw2 = vw[0], vw[1]
+        k2  = E(self._positive(x[:, 10]), D)
 
-        vl1 = self._vonmises_log(brg, k1, mu1)
-        vl2 = self._vonmises_log(brg, k2, mu2)
-        lse = torch.max(vl1, vl2)
-        vm_grid = lse + torch.log(
-            vw1 * torch.exp(vl1 - lse) + vw2 * torch.exp(vl2 - lse)
-        )
+        vl1 = E(log_vw[0], D) + self._vonmises_log(brg, k1, mu1)
+        vl2 = E(log_vw[1], D) + self._vonmises_log(brg, k2, mu2)
+        vm_grid = torch.logsumexp(torch.stack([vl1, vl2], dim=0), dim=0)
 
         # Joint log-density: add step-length and turning-angle log-probs, then normalise
         grid = gamma_grid + vm_grid
@@ -229,8 +270,8 @@ class Params_to_Grid_Block_ChV(Params_to_Grid_Block):
     """Same as :class:`Params_to_Grid_Block` but with a change-of-variables
     Jacobian correction (polar → Cartesian) applied to the Gamma density.
 
-    Divides the log-Gamma density by ``log(r)`` (i.e. subtracts it) to
-    account for the polar-to-Cartesian area element ``r dr dθ``.
+    Subtracts ``log(r)`` from the log-density (i.e. divides the density by
+    ``r``) to account for the polar-to-Cartesian area element ``r dr dθ``.
     """
 
     def _gamma_log(self, r, shape, scale):

@@ -840,3 +840,174 @@ def test_make_dataloaders_prepare_flag():
     px2, py2 = labels
     assert spatial.ndim == 4       # [B, C, H, W]
     assert px2.shape[0] == spatial.shape[0]  # batch sizes match
+
+# ---------------------------------------------------------------------------
+# Numerical stability of the movement kernel
+#
+# Regression tests for the NaN surfaces reported in 0.2.3: in float32 the von
+# Mises normaliser I0(kappa) overflows at kappa ~= 89 (a raw FCN output of only
+# log(89) ~= 4.5).  When both mixture components overflowed the whole surface
+# became NaN; when only one did, the forward pass stayed finite but the
+# gradients did not, silently poisoning the weights.
+# ---------------------------------------------------------------------------
+
+def _grid_block(image_dim=21, pixel_size=25, device="cpu"):
+    from deepssf.model import ModelParams, Params_to_Grid_Block_ChV
+    return Params_to_Grid_Block_ChV(ModelParams({
+        "batch_size": 1, "image_dim": image_dim, "pixel_size": pixel_size,
+        "dim_in_nonspatial_to_grid": 4, "dense_dim_in_nonspatial": 4,
+        "dense_dim_hidden": 8, "dense_dim_in_all": 8, "input_channels": 6,
+        "output_channels": 2, "kernel_size": 3, "stride": 1,
+        "kernel_size_mp": 2, "stride_mp": 2, "padding": 1,
+        "num_movement_params": 12, "dropout": 0.0, "device": device,
+    }))
+
+
+@pytest.mark.parametrize(
+    "label,raw",
+    [
+        ("both kappas overflow I0",    {7: 4.5, 10: 4.5}),
+        ("both kappas far past I0",    {7: 8.0, 10: 8.0}),
+        ("single kappa overflow",      {7: 6.0}),
+        ("saturating mixture weight",  {2: 5.0}),
+        ("gamma shape overflows exp",  {0: 90.0}),
+        ("gamma scale underflows exp", {1: -90.0}),
+        ("all parameters large",       dict.fromkeys(range(12), 50.0)),
+        ("all parameters small",       dict.fromkeys(range(12), -50.0)),
+    ],
+)
+def test_movement_grid_finite_for_extreme_params(label, raw):
+    """Forward *and* backward stay finite for any movement parameter values."""
+    block = _grid_block()
+    x = torch.zeros(1, 12, requires_grad=True)
+    with torch.no_grad():
+        for idx, value in raw.items():
+            x[0, idx] = value
+
+    out = block(x, torch.zeros(1, 1))
+    assert torch.isfinite(out).all(), f"non-finite surface: {label}"
+
+    out[0, 0, 0].backward()
+    assert torch.isfinite(x.grad).all(), f"non-finite gradients: {label}"
+
+
+def test_movement_grid_is_log_normalised():
+    """The returned surface is a log-probability: exp() sums to 1 per sample."""
+    block = _grid_block()
+    torch.manual_seed(0)
+    x = torch.randn(4, 12)
+    out = block(x, torch.zeros(4, 1))
+    assert torch.allclose(out.exp().sum(dim=(1, 2)),
+                          torch.ones(4), atol=1e-4)
+
+
+def test_mixture_weight_gradients_do_not_vanish():
+    """Weight parameters stay trainable at magnitudes that used to saturate.
+
+    softmax(exp(raw)) saturated to exactly (1, 0) by raw ~= 4.75, zeroing the
+    gradient; log_softmax over the raw logits keeps it finite and non-zero.
+    """
+    block = _grid_block()
+    x = torch.zeros(1, 12, requires_grad=True)
+    with torch.no_grad():
+        x[0, 2] = 5.0     # gamma mixture weight, component 1
+        x[0, 8] = 5.0     # von Mises mixture weight, component 1
+
+    block(x, torch.zeros(1, 1))[0, 0, 0].backward()
+    assert x.grad[0, 2] != 0.0
+    assert x.grad[0, 8] != 0.0
+
+
+def test_movement_grid_buffers_move_with_model():
+    """distance/bearing layers are buffers, so .to() relocates them once."""
+    block = _grid_block()
+    names = {name for name, _ in block.named_buffers()}
+    assert {"distance_layer", "bearing_layer"} <= names
+
+
+def test_grads_are_finite_helper():
+    from deepssf.train import _grads_are_finite
+
+    model = torch.nn.Linear(2, 2)
+    model(torch.ones(1, 2)).sum().backward()
+    assert _grads_are_finite(model)
+
+    with torch.no_grad():
+        model.weight.grad[0, 0] = float("nan")
+    assert not _grads_are_finite(model)
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint format guard
+# ---------------------------------------------------------------------------
+
+def _tiny_model():
+    from deepssf.model import ConvJointModel, ModelParams
+    return ConvJointModel(ModelParams({
+        "batch_size": 1, "image_dim": 21, "pixel_size": 25,
+        "dim_in_nonspatial_to_grid": 4, "dense_dim_in_nonspatial": 4,
+        "dense_dim_hidden": 8, "dense_dim_in_all": 8, "input_channels": 6,
+        "output_channels": 2, "kernel_size": 3, "stride": 1,
+        "kernel_size_mp": 2, "stride_mp": 2, "padding": 1,
+        "num_movement_params": 12, "dropout": 0.0, "device": "cpu",
+    }))
+
+
+def test_early_stopping_writes_versioned_checkpoint(tmp_path):
+    from deepssf.train import CHECKPOINT_FORMAT, EarlyStopping
+
+    path = tmp_path / "ckpt.pt"
+    model = _tiny_model()
+    EarlyStopping(path=str(path))(1.0, model)
+
+    saved = torch.load(path, weights_only=True)
+    assert saved["deepssf_checkpoint_format"] == CHECKPOINT_FORMAT
+    assert "state_dict" in saved
+    assert saved["val_loss"] == 1.0
+
+
+def test_load_checkpoint_round_trip(tmp_path):
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    path = tmp_path / "ckpt.pt"
+    saved_model = _tiny_model()
+    EarlyStopping(path=str(path))(0.5, saved_model)
+
+    fresh = _tiny_model()
+    load_checkpoint(str(path), fresh)
+    for (_, a), (_, b) in zip(
+        saved_model.state_dict().items(), fresh.state_dict().items(), strict=True
+    ):
+        assert torch.equal(a, b)
+
+
+def test_load_checkpoint_rejects_legacy_by_default(tmp_path):
+    """A bare state_dict (≤ 0.2.3) must fail loudly, not load silently."""
+    from deepssf.train import load_checkpoint
+
+    path = tmp_path / "legacy.pt"
+    torch.save(_tiny_model().state_dict(), path)   # pre-0.3.0 layout
+
+    with pytest.raises(RuntimeError, match="pre-0.3.0"):
+        load_checkpoint(str(path), _tiny_model())
+
+
+def test_load_checkpoint_allow_legacy_opt_in(tmp_path):
+    from deepssf.train import load_checkpoint
+
+    path = tmp_path / "legacy.pt"
+    torch.save(_tiny_model().state_dict(), path)
+
+    out = load_checkpoint(str(path), _tiny_model(), allow_legacy=True)
+    assert out["deepssf_checkpoint_format"] == 1
+
+
+def test_load_checkpoint_rejects_future_format(tmp_path):
+    from deepssf.train import CHECKPOINT_FORMAT, load_checkpoint
+
+    path = tmp_path / "future.pt"
+    torch.save({"deepssf_checkpoint_format": CHECKPOINT_FORMAT + 1,
+                "state_dict": _tiny_model().state_dict()}, path)
+
+    with pytest.raises(RuntimeError, match="Upgrade deepssf"):
+        load_checkpoint(str(path))

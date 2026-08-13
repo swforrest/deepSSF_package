@@ -19,11 +19,25 @@ Key objects
 from __future__ import annotations
 
 import os
+import warnings
 
 import torch
 from torch import nn, optim
 
 from deepssf.utils import get_device
+
+#: Version of the on-disk checkpoint layout written by :class:`EarlyStopping`.
+#:
+#: * *format 1* (deepssf ≤ 0.2.3) — a bare ``state_dict``, with no metadata.
+#: * *format 2* (deepssf ≥ 0.3.0) — a dict with ``deepssf_checkpoint_format``,
+#:   ``deepssf_version``, ``val_loss`` and ``state_dict`` keys.
+#:
+#: The bump exists because 0.3.0 changed the meaning of movement parameters
+#: 2, 5, 8 and 11 (mixture weights moved from ``softmax(exp(raw))`` to
+#: ``log_softmax(raw)``).  Format-1 files still load into a 0.3.0 model without
+#: a key mismatch, so :func:`load_checkpoint` uses this marker to refuse them
+#: loudly instead of silently misinterpreting four parameters.
+CHECKPOINT_FORMAT = 2
 
 # ---------------------------------------------------------------------------
 # Loss
@@ -80,17 +94,30 @@ class negativeLogLikeLoss(nn.Module):
         hab_surface  = predict[:, :, :, 0]
         move_surface = predict[:, :, :, 1]
 
-        if torch.isnan(hab_surface).any():
-            print("NaNs detected in habitat_probability_surface")
-        if torch.isnan(move_surface).any():
-            print("NaNs detected in movement_probability_surface")
-
         # When freeze_movement=True only habitat drives the combined loss; the
         # movement sub-network receives no gradient on this pass.
         pred_prod = hab_surface if self.freeze_movement else hab_surface + move_surface
 
-        if torch.isnan(pred_prod).any():
-            print("NaNs detected in pred_prod")
+        # One check on the combined surface rather than three separate ones:
+        # each `.any()` forces a device→host sync, which is costly per batch on
+        # CUDA and MPS.  warnings.warn de-duplicates by default, so a run that
+        # goes bad reports once instead of flooding the log; train_loop is
+        # responsible for skipping the affected updates.
+        if not torch.isfinite(pred_prod).all():
+            which = []
+            if not torch.isfinite(hab_surface).all():
+                which.append("habitat")
+            if not torch.isfinite(move_surface).all():
+                which.append("movement")
+            warnings.warn(
+                "Non-finite values in the "
+                f"{' and '.join(which) or 'combined'} probability surface. "
+                "Training updates using this batch will be skipped. This usually "
+                "means the movement parameters have diverged — consider passing "
+                "grad_clip to fit(), or lowering the movement learning rate.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         # Re-normalise the combined log surface so it integrates to 1 in prob space
         pred_prod = pred_prod - torch.logsumexp(pred_prod, dim=(1, 2), keepdim=True)
@@ -133,6 +160,16 @@ class EarlyStopping:
         File path for the saved checkpoint.
     trace_func:
         Callable used for log messages (default: ``print``).
+
+    Notes
+    -----
+    The checkpoint is a dict with ``deepssf_checkpoint_format``,
+    ``deepssf_version``, ``val_loss`` and ``state_dict`` keys (see
+    :data:`CHECKPOINT_FORMAT`), not a bare ``state_dict`` as in ≤ 0.2.3.  Read it
+    back with :func:`load_checkpoint`, which verifies the format::
+
+        load_checkpoint(path, model)                 # loads in place
+        state = load_checkpoint(path)["state_dict"]   # or just the weights
     """
 
     def __init__(
@@ -182,13 +219,103 @@ class EarlyStopping:
                 f"Validation loss decreased "
                 f"({self.val_loss_min:.6f} → {val_loss:.6f}). Saving model…"
             )
-        torch.save(model.state_dict(), self.path)
+        # Deferred import: deepssf/__init__ imports this module, so importing it
+        # at module scope would be circular.
+        from deepssf import __version__
+
+        torch.save(
+            {
+                "deepssf_checkpoint_format": CHECKPOINT_FORMAT,
+                "deepssf_version": __version__,
+                "val_loss": float(val_loss),
+                "state_dict": model.state_dict(),
+            },
+            self.path,
+        )
         self.val_loss_min = val_loss
 
 
 # ---------------------------------------------------------------------------
 # Training / evaluation loops
 # ---------------------------------------------------------------------------
+
+def load_checkpoint(
+    path: str,
+    model: nn.Module | None = None,
+    *,
+    map_location=None,
+    allow_legacy: bool = False,
+    strict: bool = True,
+) -> dict:
+    """Load a checkpoint written by :class:`EarlyStopping`, checking its format.
+
+    Parameters
+    ----------
+    path:
+        Checkpoint file to read.
+    model:
+        If given, the weights are loaded into this model in place.
+    map_location:
+        Passed to :func:`torch.load` (e.g. ``'cpu'`` to read a GPU checkpoint).
+    allow_legacy:
+        Accept a pre-0.3.0 checkpoint (a bare ``state_dict``).  Off by default
+        because movement parameters 2, 5, 8 and 11 changed meaning in 0.3.0:
+        the file will load without error but those four values are interpreted
+        differently, so the movement kernel will be wrong.  Only enable this if
+        the checkpoint predates 0.3.0 *and* you are not relying on the movement
+        sub-network — otherwise retrain.
+    strict:
+        Passed to ``model.load_state_dict``.
+
+    Returns
+    -------
+    dict
+        The checkpoint metadata, with a ``state_dict`` key.  Legacy files are
+        returned in the same shape, with ``deepssf_checkpoint_format`` set to 1.
+
+    Raises
+    ------
+    RuntimeError
+        If the file is a legacy checkpoint and *allow_legacy* is ``False``, or
+        if it was written by a newer checkpoint format than this version knows.
+    """
+    obj = torch.load(path, map_location=map_location, weights_only=True)
+
+    # Format 1: a bare state_dict, i.e. a flat mapping of names to tensors.
+    if "deepssf_checkpoint_format" not in obj:
+        if not allow_legacy:
+            raise RuntimeError(
+                f"{path} is a pre-0.3.0 deepssf checkpoint (no format marker). "
+                "deepssf 0.3.0 changed the parameterisation of the movement "
+                "mixture weights, so parameters 2, 5, 8 and 11 in this file mean "
+                "something different to the current model and would be loaded "
+                "silently. Retrain the model, or pass allow_legacy=True if you "
+                "understand the consequences."
+            )
+        obj = {"deepssf_checkpoint_format": 1, "state_dict": obj}
+
+    found = obj["deepssf_checkpoint_format"]
+    if found > CHECKPOINT_FORMAT:
+        raise RuntimeError(
+            f"{path} uses checkpoint format {found}, but this deepssf "
+            f"({CHECKPOINT_FORMAT}) can only read up to format "
+            f"{CHECKPOINT_FORMAT}. Upgrade deepssf to load it."
+        )
+
+    if model is not None:
+        model.load_state_dict(obj["state_dict"], strict=strict)
+
+    return obj
+
+
+def _grads_are_finite(model: nn.Module) -> bool:
+    """True if every populated gradient in *model* is free of NaN and Inf."""
+    return all(
+        torch.isfinite(p.grad).all()
+        for p in model.parameters()
+        if p.grad is not None
+    )
+
 
 def train_loop(
     dataloader_train,
@@ -198,6 +325,7 @@ def train_loop(
     *,
     skip_epoch0_training: bool = False,
     batch_size: int = 32,
+    grad_clip: float | None = None,
 ) -> torch.Tensor:
     """Run one training epoch.
 
@@ -219,11 +347,23 @@ def train_loop(
         Useful for inspecting untrained-model outputs.
     batch_size:
         Used only for progress reporting.
+    grad_clip:
+        If set, clip the global gradient norm to this value before each
+        optimiser step (``torch.nn.utils.clip_grad_norm_``).  ``None``
+        (default) leaves gradients unclipped.
 
     Returns
     -------
     epoch_loss : torch.Tensor
         Mean loss over all batches.
+
+    Notes
+    -----
+    Batches whose loss is not finite are skipped: the optimiser is not stepped
+    and the batch is excluded from the epoch mean.  Stepping on a NaN or Inf
+    gradient writes NaN into every weight it touches, after which the run is
+    unrecoverable, so skipping keeps a single bad batch from ending training.
+    A count is reported at the end of the epoch.
     """
     device = get_device()
     optimiser_movement, optimiser_habitat = optimisers
@@ -232,6 +372,8 @@ def train_loop(
     size        = len(dataloader_train.dataset)
     model.train()
     epoch_loss  = 0.0
+    n_finite    = 0
+    n_skipped   = 0
 
     for batch, (x1, x2, x3, y, _) in enumerate(dataloader_train):
         # Move batch to the active compute device (MPS / CUDA / CPU)
@@ -244,7 +386,19 @@ def train_loop(
             outputs = model((x1, x2, x3))
             total_loss, _, _ = loss_fn(outputs, y)
 
+        # A non-finite loss cannot produce a usable update; stepping on it would
+        # write NaN into the weights permanently.  Skip the batch instead.
+        if not torch.isfinite(total_loss):
+            n_skipped += 1
+            if n_skipped <= 5:
+                print(
+                    f"  [warning] non-finite loss ({total_loss.item()}) at batch "
+                    f"{batch}; skipping update"
+                )
+            continue
+
         epoch_loss += total_loss.detach()
+        n_finite   += 1
 
         if not skip_epoch0_training:
             if optimiser_movement is not None:
@@ -253,6 +407,23 @@ def train_loop(
                 optimiser_habitat.zero_grad()
 
             total_loss.backward()
+
+            # Gradients can be non-finite even when the loss is not (e.g. a
+            # density that underflows to zero at the observed pixel), so check
+            # after backward as well and drop the update if anything is bad.
+            if not _grads_are_finite(model):
+                n_skipped += 1
+                if n_skipped <= 5:
+                    print(f"  [warning] non-finite gradients at batch {batch}; "
+                          "skipping update")
+                if optimiser_movement is not None:
+                    optimiser_movement.zero_grad()
+                if optimiser_habitat is not None:
+                    optimiser_habitat.zero_grad()
+                continue
+
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
             # The two sub-networks share a single backward pass but are updated
             # by separate optimisers. To prevent cross-contamination:
@@ -284,9 +455,16 @@ def train_loop(
 
         torch.cuda.empty_cache()
 
-    epoch_loss /= num_batches
+    # Average over the batches that actually contributed, so a few skipped
+    # batches do not silently deflate the reported loss.
+    epoch_loss /= max(n_finite, 1)
     tag = "observation-only " if skip_epoch0_training else ""
     print(f"\nAvg {tag}training loss: {epoch_loss:>15f}")
+    if n_skipped:
+        print(
+            f"  [warning] {n_skipped}/{num_batches} batches skipped this epoch "
+            "(non-finite loss or gradients)"
+        )
     return epoch_loss
 
 
@@ -473,6 +651,7 @@ def fit(
     early_stopping: EarlyStopping | None = None,
     snapshot_dir: str | None = None,
     snapshot_item: int = 0,
+    grad_clip: float | None = None,
 ) -> dict[str, list[float]]:
     """Train for *n_epochs* with per-epoch validation, scheduling, and snapshots.
 
@@ -499,6 +678,10 @@ def fit(
         Directory for per-epoch 2×2 PNG snapshots.  ``None`` disables saving.
     snapshot_item:
         Index into ``dl_val.dataset`` for the snapshot sample.
+    grad_clip:
+        Global gradient-norm clip applied before each optimiser step.  ``None``
+        (default) leaves gradients unclipped; a value around ``1.0``–``5.0`` is
+        a reasonable safeguard if the movement sub-network diverges.
 
     Returns
     -------
@@ -524,7 +707,9 @@ def fit(
     for epoch in range(n_epochs):
         print(f"\nEpoch {epoch + 1}/{n_epochs}")
 
-        train_loss = train_loop(dl_train, model, loss_fn, optimisers)
+        train_loss = train_loop(
+            dl_train, model, loss_fn, optimisers, grad_clip=grad_clip
+        )
 
         # Validation — track all three loss components
         model.eval()
