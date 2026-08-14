@@ -1293,3 +1293,255 @@ def test_load_checkpoint_rejects_future_format(tmp_path):
 
     with pytest.raises(RuntimeError, match="Upgrade deepssf"):
         load_checkpoint(str(path))
+
+
+# ---------------------------------------------------------------------------
+# deepssf.simulate — multiple trajectories and saving
+# ---------------------------------------------------------------------------
+
+def _sim_model_and_landscape(small_params, window=11):
+    """Working model + landscape/transform sized for the simulation tests."""
+    import rasterio.transform
+
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.simulate import make_simulation_inputs
+
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+
+    # Match the scalar channel count to whatever make_simulation_inputs emits
+    n_scalars = make_simulation_inputs(n_steps=1, starting_yday=1)[0].shape[1]
+    n_spatial = 2
+    params = ModelParams({
+        **small_params.__dict__,
+        "dim_in_nonspatial_to_grid": n_scalars,
+        "input_channels": n_spatial + n_scalars,
+        "dense_dim_in_all": flat,
+    })
+    model = ConvJointModel(params)
+    model.eval()
+
+    size = window * 4
+    # North-up transform (negative y resolution), 25 m cells
+    transform = rasterio.transform.from_origin(0, size * 25, 25, 25)
+    rasters = [torch.rand(size, size) for _ in range(n_spatial)]
+    return model, rasters, transform, size
+
+
+def test_simulate_trajectories_batched_shape(small_params):
+    from deepssf.simulate import simulate_trajectories_batched
+
+    W = 11
+    model, rasters, transform, size = _sim_model_and_landscape(small_params, W)
+    centre = size * 25 / 2
+
+    df = simulate_trajectories_batched(
+        model,
+        get_landscape=lambda _m: rasters,
+        transform=transform,
+        start_x=centre,
+        start_y=centre,
+        n_steps=5,
+        n_trajectories=3,
+        window_size=W,
+        month_index_fn=lambda _y: 0,
+    )
+    assert len(df) == 15
+    assert sorted(df["trajectory_id"].unique()) == [0, 1, 2]
+    assert list(df.columns) == [
+        "trajectory_id", "step", "x", "y", "hour", "yday", "month_index",
+    ]
+    # Every sampled location must sit inside the raster extent
+    assert df["x"].between(0, size * 25).all()
+    assert df["y"].between(0, size * 25).all()
+
+
+def test_simulate_trajectories_batched_per_trajectory_starts(small_params):
+    """Start locations may differ between trajectories."""
+    from deepssf.simulate import simulate_trajectories_batched
+
+    W = 11
+    model, rasters, transform, size = _sim_model_and_landscape(small_params, W)
+    starts_x = [size * 25 * 0.3, size * 25 * 0.7]
+    starts_y = [size * 25 * 0.3, size * 25 * 0.7]
+
+    df = simulate_trajectories_batched(
+        model,
+        get_landscape=lambda _m: rasters,
+        transform=transform,
+        start_x=starts_x,
+        start_y=starts_y,
+        n_steps=2,
+        window_size=W,
+        month_index_fn=lambda _y: 0,
+    )
+    assert df["trajectory_id"].nunique() == 2
+    first_steps = df[df["step"] == 0].sort_values("trajectory_id")
+    # Each trajectory stays within one window of its own start
+    for (_, row), sx in zip(first_steps.iterrows(), starts_x, strict=True):
+        assert abs(row["x"] - sx) <= (W // 2 + 1) * 25
+
+
+def test_simulate_trajectories_methods_agree_on_shape(small_params):
+    from deepssf.simulate import simulate_trajectories
+
+    W = 11
+    model, rasters, transform, size = _sim_model_and_landscape(small_params, W)
+    centre = size * 25 / 2
+
+    frames = {
+        method: simulate_trajectories(
+            model,
+            get_landscape=lambda _m: rasters,
+            transform=transform,
+            start_x=centre,
+            start_y=centre,
+            n_steps=4,
+            n_trajectories=2,
+            method=method,
+            window_size=W,
+            month_index_fn=lambda _y: 0,
+        )
+        for method in ("batched", "sequential", "parallel")
+    }
+    for method, df in frames.items():
+        assert len(df) == 8, method
+        assert set(df["trajectory_id"]) == {0, 1}, method
+        assert {"x", "y", "hour", "yday", "step"} <= set(df.columns), method
+
+
+def test_simulate_trajectories_batched_rejects_varying_start_times(small_params):
+    from deepssf.simulate import simulate_trajectories
+
+    W = 11
+    model, rasters, transform, size = _sim_model_and_landscape(small_params, W)
+    with pytest.raises(ValueError, match="shared clock"):
+        simulate_trajectories(
+            model,
+            get_landscape=lambda _m: rasters,
+            transform=transform,
+            start_x=size * 25 / 2,
+            start_y=size * 25 / 2,
+            n_steps=2,
+            n_trajectories=2,
+            starting_yday=[10, 200],
+            window_size=W,
+            month_index_fn=lambda _y: 0,
+        )
+
+
+def test_simulate_trajectories_rejects_unknown_method(small_params):
+    from deepssf.simulate import simulate_trajectories
+
+    W = 11
+    model, rasters, transform, size = _sim_model_and_landscape(small_params, W)
+    with pytest.raises(ValueError, match="Unknown method"):
+        simulate_trajectories(
+            model,
+            get_landscape=lambda _m: rasters,
+            transform=transform,
+            start_x=size * 25 / 2,
+            start_y=size * 25 / 2,
+            n_steps=2,
+            method="mpi",
+            window_size=W,
+        )
+
+
+def test_crop_windows_matches_single_window_helper():
+    """The batched crop must reproduce subset_raster_with_padding_torch."""
+    import rasterio.transform
+
+    from deepssf.simulate import _crop_windows, _pad_landscape, _pixel_from_coords
+    from deepssf.utils import subset_raster_with_padding_torch
+
+    W = 7
+    transform = rasterio.transform.from_origin(0, 500, 25, 25)
+    rasters = [torch.rand(20, 20), torch.rand(20, 20)]
+    xs = np.array([50.0, 300.0, 12.0])   # includes a location near the edge
+    ys = np.array([450.0, 200.0, 490.0])
+
+    padded = _pad_landscape(rasters, W, "cpu")
+    cols, rows = _pixel_from_coords(transform, xs, ys)
+    batch = _crop_windows(
+        padded, torch.as_tensor(cols), torch.as_tensor(rows), W
+    )
+
+    for j, (x, y) in enumerate(zip(xs, ys, strict=True)):
+        for c, raster in enumerate(rasters):
+            expected, _, _ = subset_raster_with_padding_torch(
+                raster, x=x, y=y, window_size=W, transform=transform
+            )
+            assert torch.allclose(batch[j, c], expected)
+
+
+def test_save_trajectories_does_not_overwrite(tmp_path):
+    import pandas as pd
+
+    from deepssf.simulate import save_trajectories
+
+    df = pd.DataFrame({
+        "trajectory_id": [0, 0, 1, 1],
+        "step": [0, 1, 0, 1],
+        "x": [1.0, 2.0, 3.0, 4.0],
+        "y": [1.0, 2.0, 3.0, 4.0],
+    })
+
+    first = save_trajectories(df, tmp_path, prefix="test", date="2026-01-01")
+    second = save_trajectories(df, tmp_path, prefix="test", date="2026-01-01")
+
+    assert first[0].name == "test_2traj_2steps_2026-01-01.csv"
+    assert second[0].name == "test_2traj_2steps_2026-01-01_2.csv"
+    assert first[0].exists() and second[0].exists()
+    assert len(pd.read_csv(first[0])) == 4
+
+
+def test_save_trajectories_split_writes_one_file_per_trajectory(tmp_path):
+    import pandas as pd
+
+    from deepssf.simulate import save_trajectories
+
+    df = pd.DataFrame({
+        "trajectory_id": [0, 0, 1, 1],
+        "x": [1.0, 2.0, 3.0, 4.0],
+        "y": [1.0, 2.0, 3.0, 4.0],
+    })
+    written = save_trajectories(
+        df, tmp_path, prefix="test", split=True, date="2026-01-01"
+    )
+    assert len(written) == 2
+    assert all(p.exists() for p in written)
+    assert len(pd.read_csv(written[0])) == 2
+
+
+# ---------------------------------------------------------------------------
+# deepssf.plot
+# ---------------------------------------------------------------------------
+
+def test_plot_trajectories_folium_builds_map():
+    import pandas as pd
+
+    folium = pytest.importorskip("folium")
+    from deepssf.plot import plot_trajectories_folium
+
+    # A few points in EPSG:3112 (Australian Lambert), near the study area
+    df = pd.DataFrame({
+        "trajectory_id": [0, 0, 1, 1],
+        "x": [40000.0, 40100.0, 40200.0, 40300.0],
+        "y": [-1400000.0, -1400100.0, -1400200.0, -1400300.0],
+    })
+    fmap = plot_trajectories_folium(df, src_crs="EPSG:3112")
+    assert isinstance(fmap, folium.Map)
+    html = fmap.get_root().render()
+    assert "polyline" in html.lower()
+
+
+def test_plot_trajectories_folium_requires_input():
+    pytest.importorskip("folium")
+    from deepssf.plot import plot_trajectories_folium
+
+    with pytest.raises(ValueError, match="Nothing to plot"):
+        plot_trajectories_folium()

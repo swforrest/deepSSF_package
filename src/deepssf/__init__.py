@@ -18,9 +18,13 @@ from deepssf.data import (
     prepare_movement_df,
 )
 from deepssf.model import ConvJointModel, ModelParams
+from deepssf.plot import plot_trajectories_folium
 from deepssf.simulate import (
     make_simulation_inputs,
+    save_trajectories,
     simulate_next_step,
+    simulate_trajectories,
+    simulate_trajectories_batched,
     simulate_trajectory,
 )
 from deepssf.train import (
@@ -73,6 +77,11 @@ __all__ = [
     "make_simulation_inputs",
     "simulate_next_step",
     "simulate_trajectory",
+    "simulate_trajectories",
+    "simulate_trajectories_batched",
+    "save_trajectories",
+    # plot
+    "plot_trajectories_folium",
     # validate
     "validate_next_step_probs",
     # utils

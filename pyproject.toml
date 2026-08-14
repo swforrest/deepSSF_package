@@ -64,6 +64,9 @@ examples = [
     "jupyterlab>=4.0",
     "ipykernel>=6.0",
 ]
+maps = [
+    "folium>=0.15",   # plot_trajectories_folium in deepssf.plot
+]
 
 [project.urls]
 Homepage = "https://swforrest.github.io/deepSSF/"

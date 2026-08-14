@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`simulate_trajectories`** — simulate many trajectories in one call, returning
+  them stacked in a long-format DataFrame with `trajectory_id` and `step`
+  columns. Three methods: `"batched"` (the default), `"sequential"` (a plain loop
+  over `simulate_trajectory`) and `"parallel"` (that loop over a thread pool).
+- **`simulate_trajectories_batched`** — steps every trajectory together so the
+  model sees a batch of windows per forward pass instead of one. Measured on an
+  Apple M-series GPU at `window_size=75`, 200 steps: 2.2× faster than the
+  sequential loop at 4 trajectories, 6.9× at 16 and 34× at 64, since the cost per
+  step is nearly flat in the number of trajectories. Window extraction is a
+  single advanced-indexing gather over a landscape padded once per month, and
+  sampling uses `torch.multinomial` over the whole batch. The trade-off is a
+  shared clock: `starting_yday`/`starting_hour` must be scalars (start
+  *locations* may still vary per trajectory).
+  Note that the sub-pixel jitter is scaled from the raster resolution implied by
+  the transform, whereas `simulate_next_step` hard-codes a 25 m cell — so batched
+  and sequential runs differ slightly on rasters of any other resolution.
+- **`save_trajectories`** — write simulated trajectories to CSV under a name that
+  records trajectory count, step count and date, appending a run counter rather
+  than ever overwriting an existing file. `split=True` writes one file per
+  trajectory.
+- **`deepssf.plot.plot_trajectories_folium`** — draw simulated and observed
+  trajectories over a satellite (or topographic/OSM) basemap, reprojecting from
+  the data's projected CRS to EPSG:4326 via `rasterio.warp` (no pyproj axis-order
+  trap). Each trajectory is its own toggleable layer. `folium` is an optional
+  dependency: `pip install "deepSSF[maps]"`.
+
 ### Fixed
 - **Environmental layers were not scaled to [0, 1].** `load_environmental_layers`
   divided by the maximum rather than the range — `(data - lo) / hi` instead of
