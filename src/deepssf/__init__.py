@@ -19,6 +19,7 @@ from deepssf.data import (
 )
 from deepssf.model import ConvJointModel, ModelParams
 from deepssf.plot import plot_trajectories_folium
+from deepssf.predict import habitat_edge_buffer, predict_habitat_landscape
 from deepssf.simulate import (
     make_simulation_inputs,
     save_trajectories,
@@ -32,6 +33,7 @@ from deepssf.train import (
     EarlyStopping,
     fit,
     load_checkpoint,
+    load_head_weights,
     make_optimisers,
     negativeLogLikeLoss,
     set_trainable,
@@ -60,6 +62,7 @@ __all__ = [
     "negativeLogLikeLoss",
     "EarlyStopping",
     "load_checkpoint",
+    "load_head_weights",
     "CHECKPOINT_FORMAT",
     "train_loop",
     "test_loop",
@@ -82,6 +85,9 @@ __all__ = [
     "save_trajectories",
     # plot
     "plot_trajectories_folium",
+    # predict
+    "predict_habitat_landscape",
+    "habitat_edge_buffer",
     # validate
     "validate_next_step_probs",
     # utils

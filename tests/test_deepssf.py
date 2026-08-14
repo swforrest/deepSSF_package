@@ -803,6 +803,11 @@ def test_fit_returns_loss_history(small_params):
     from deepssf.train import fit, make_optimisers, negativeLogLikeLoss
     from deepssf.utils import get_device
 
+    # The final assertion reads the *untrained* habitat surface, which depends
+    # on the random initialisation — seed it so the test does not depend on how
+    # much of the global RNG stream earlier tests happened to consume.
+    torch.manual_seed(0)
+
     dim = small_params.image_dim
     for _ in range(3):
         dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
@@ -1545,3 +1550,392 @@ def test_plot_trajectories_folium_requires_input():
 
     with pytest.raises(ValueError, match="Nothing to plot"):
         plot_trajectories_folium()
+
+
+@pytest.mark.parametrize("cell", [10.0, 25.0, 100.0])
+def test_simulate_next_step_jitter_scales_with_raster_resolution(small_params, cell):
+    """The sub-pixel jitter must keep the location inside the sampled cell.
+
+    Regression test: the jitter was hard-coded to a 25 m cell, so on a 10 m
+    raster it scattered locations up to 2.5 cells away from the pixel actually
+    sampled, and on a 100 m raster it never left the first quarter of the cell.
+    """
+    import rasterio.transform
+
+    from deepssf.simulate import make_simulation_inputs, simulate_next_step
+
+    W = 11
+    model, rasters, _transform, size = _sim_model_and_landscape(small_params, W)
+    transform = rasterio.transform.from_origin(0, size * cell, cell, cell)
+    n_scalars = make_simulation_inputs(n_steps=1, starting_yday=1)[0].shape[1]
+
+    x_loc = y_loc = size * cell / 2
+    for _ in range(25):
+        new_x, new_y, px, py = simulate_next_step(
+            model, rasters, torch.zeros(1, n_scalars), torch.zeros(1, 1),
+            window_size=W, x_loc=x_loc, y_loc=y_loc, transform=transform,
+        )
+        # Upper-left corner of the cell that was sampled
+        centre_col, centre_row = (~transform) * (x_loc, y_loc)
+        half = W // 2
+        col = int(np.floor(centre_col)) - half + px
+        row = int(np.floor(centre_row)) - half + py
+        corner_x, corner_y = transform * (col, row)
+
+        assert 0.0 <= new_x - corner_x <= cell
+        # North-up raster: y decreases into the cell from its upper-left corner
+        assert -cell <= new_y - corner_y <= 0.0
+
+
+# ---------------------------------------------------------------------------
+# deepssf.predict
+# ---------------------------------------------------------------------------
+
+def _habitat_model(small_params, n_spatial=2):
+    """Model whose habitat CNN takes n_spatial rasters + the simulation scalars."""
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.simulate import make_simulation_inputs
+
+    n_scalars = make_simulation_inputs(n_steps=1, starting_yday=1)[0].shape[1]
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    params = ModelParams({
+        **small_params.__dict__,
+        "dim_in_nonspatial_to_grid": n_scalars,
+        "input_channels": n_spatial + n_scalars,
+        "dense_dim_in_all": small_params.output_channels * dim * dim,
+    })
+    model = ConvJointModel(params)
+    model.eval()
+    return model, n_scalars
+
+
+def test_habitat_edge_buffer_matches_receptive_field(small_params):
+    from deepssf.predict import habitat_edge_buffer
+    model, _ = _habitat_model(small_params)
+    # Four 3x3 convolutions, each pulling in one column of padding
+    assert habitat_edge_buffer(model) == 4
+
+
+def test_predict_habitat_landscape_shape_and_mask(small_params):
+    from deepssf.predict import habitat_edge_buffer, predict_habitat_landscape
+
+    model, n_scalars = _habitat_model(small_params)
+    rasters = [torch.rand(60, 80) for _ in range(2)]
+    surface = predict_habitat_landscape(model, rasters, np.zeros(n_scalars))
+
+    buf = habitat_edge_buffer(model)
+    assert surface.shape == (60, 80)
+    assert np.isnan(surface[:buf, :]).all()
+    assert np.isnan(surface[:, -buf:]).all()
+    assert np.isfinite(surface[buf:-buf, buf:-buf]).all()
+    # Normalised: the valid cells form a probability distribution
+    assert np.exp(surface[~np.isnan(surface)]).sum() == pytest.approx(1.0, rel=1e-4)
+
+
+def test_predict_habitat_landscape_chunking_is_exact(small_params):
+    """Chunked and single-pass predictions must agree cell for cell."""
+    from deepssf.predict import predict_habitat_landscape
+
+    model, n_scalars = _habitat_model(small_params)
+    rasters = [torch.rand(120, 40) for _ in range(2)]
+    scalars = np.linspace(-1, 1, n_scalars)
+
+    whole = predict_habitat_landscape(model, rasters, scalars, chunk_rows=None)
+    chunked = predict_habitat_landscape(model, rasters, scalars, chunk_rows=16)
+
+    valid = ~np.isnan(whole)
+    assert np.allclose(whole[valid], chunked[valid], atol=1e-5)
+
+
+def test_predict_habitat_landscape_matches_windowed_forward(small_params):
+    """A pixel's landscape value must equal what a window centred there gives.
+
+    This is the property that makes the whole approach valid: the habitat CNN
+    is fully convolutional, so running it over the landscape is the same as
+    sliding the training window across it.
+    """
+    from deepssf.predict import predict_habitat_landscape
+
+    model, n_scalars = _habitat_model(small_params)
+    H = W = 61
+    rasters = [torch.rand(H, W) for _ in range(2)]
+    scalars = np.zeros(n_scalars)
+
+    landscape = predict_habitat_landscape(
+        model, rasters, scalars, normalise=False, chunk_rows=None
+    )
+
+    # A 41 px window centred on the middle of the raster
+    win = 41
+    half = win // 2
+    cy = cx = H // 2
+    crop = torch.stack(
+        [r[cy - half:cy + half + 1, cx - half:cx + half + 1] for r in rasters]
+    ).unsqueeze(0)
+    scalar_maps = torch.zeros(1, n_scalars, win, win)
+    with torch.no_grad():
+        windowed = model.conv_habitat.conv2d(
+            torch.cat([crop, scalar_maps], dim=1)
+        ).squeeze()
+
+    # Compare the centre of the window, far from either set of padding artifacts
+    assert windowed[half, half].item() == pytest.approx(landscape[cy, cx], abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# deepssf.train — checkpointing during single-head stages
+# ---------------------------------------------------------------------------
+
+# Real numbers from a feral-pig run's habitat-only stage (epochs 11-20).  The
+# combined loss falls every epoch while the habitat loss bottoms out at epoch
+# 12 and then gets steadily worse: habitat is buying a lower joint loss by
+# lowering logZ, not by fitting the observed locations better.
+_HABITAT_STAGE = [
+    # (val_total, val_habitat, val_movement)
+    (4.115486, 8.516167, 4.126772),
+    (4.115594, 8.481732, 4.126772),   # <- best habitat
+    (4.113183, 8.508135, 4.126772),
+    (4.112547, 8.521410, 4.126772),
+    (4.110984, 8.550330, 4.126772),
+    (4.108857, 8.612041, 4.126772),
+    (4.107189, 8.547318, 4.126772),
+    (4.106579, 8.581531, 4.126772),
+    (4.105697, 8.570892, 4.126772),
+    (4.104966, 8.578071, 4.126772),
+]
+
+
+def test_habitat_stage_total_and_habitat_losses_disagree():
+    """The premise of the fix: these two criteria pick different epochs.
+
+    total = habitat + movement + logZ.  Movement is pinned during the stage, so
+    any fall in total that is not a fall in habitat came from logZ.
+    """
+    totals = [row[0] for row in _HABITAT_STAGE]
+    habitats = [row[1] for row in _HABITAT_STAGE]
+    movements = [row[2] for row in _HABITAT_STAGE]
+
+    assert len(set(movements)) == 1, "movement should be frozen in this stage"
+    assert totals.index(min(totals)) == 9
+    assert habitats.index(min(habitats)) == 1
+
+    # logZ absorbed the difference: it fell by more than habitat rose
+    log_z = [t - h - m for t, h, m in _HABITAT_STAGE]
+    assert log_z[9] < log_z[1]
+    assert habitats[9] > habitats[1]
+
+
+def _stamped_model(value: float):
+    """A tiny model whose single parameter records which epoch saved it."""
+    import torch.nn as nn
+
+    model = nn.Linear(1, 1, bias=False)
+    with torch.no_grad():
+        model.weight.fill_(value)
+    return model
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_on", "expected_epoch"),
+    [
+        ("total", 9),    # last epoch: combined loss falls monotonically
+        ("active", 1),   # epoch with the lowest habitat loss
+    ],
+)
+def test_checkpoint_on_selects_the_right_epoch(tmp_path, checkpoint_on, expected_epoch):
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    path = tmp_path / "best.pt"
+    stopper = EarlyStopping(
+        patience=100, path=str(path), monitor="both", checkpoint_on=checkpoint_on
+    )
+    for epoch, (total, hab, mov) in enumerate(_HABITAT_STAGE):
+        stopper(
+            total, _stamped_model(epoch),
+            val_habitat=hab, val_movement=mov,
+            active=("habitat",),
+        )
+
+    saved = load_checkpoint(str(path))
+    assert saved["state_dict"]["weight"].item() == pytest.approx(expected_epoch)
+
+
+def test_checkpoint_on_active_uses_total_when_all_heads_train(tmp_path):
+    """With both heads training, the joint likelihood is the right criterion."""
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    path = tmp_path / "best.pt"
+    stopper = EarlyStopping(
+        patience=100, path=str(path), monitor="both", checkpoint_on="active"
+    )
+    # Total improves; habitat gets worse.  The checkpoint should follow total.
+    for epoch, (total, hab) in enumerate([(5.0, 8.0), (4.0, 8.5), (3.0, 9.0)]):
+        stopper(
+            total, _stamped_model(epoch),
+            val_habitat=hab, val_movement=1.0,
+            active=("habitat", "movement"),
+        )
+
+    assert load_checkpoint(str(path))["state_dict"]["weight"].item() == 2
+    assert load_checkpoint(str(path))["checkpoint_criterion"] == "total"
+
+
+def test_checkpoint_criterion_change_resets_best_score(tmp_path):
+    """A habitat-only score must not be compared against a combined one."""
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    path = tmp_path / "best.pt"
+    stopper = EarlyStopping(
+        patience=100, path=str(path), monitor="both", checkpoint_on="active"
+    )
+    # Habitat-only stage: criterion is habitat (8.0), a much larger number
+    stopper(4.0, _stamped_model(0), val_habitat=8.0, val_movement=4.0,
+            active=("habitat",))
+    assert load_checkpoint(str(path))["checkpoint_criterion"] == "habitat"
+
+    # Joint stage: criterion becomes total (4.5).  Without a reset, -4.5 would
+    # beat the stale best of -8.0 for the wrong reason, and every later epoch
+    # would be judged against a criterion it is not on.
+    stopper(4.5, _stamped_model(1), val_habitat=8.2, val_movement=4.4,
+            active=("habitat", "movement"))
+    assert load_checkpoint(str(path))["state_dict"]["weight"].item() == 1
+
+    # A worse total in the same stage must NOT save
+    stopper(4.9, _stamped_model(2), val_habitat=8.1, val_movement=4.3,
+            active=("habitat", "movement"))
+    assert load_checkpoint(str(path))["state_dict"]["weight"].item() == 1
+
+
+def test_head_paths_track_each_head_across_stages(tmp_path):
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    main = tmp_path / "best.pt"
+    hab_path = tmp_path / "best_habitat.pt"
+    mov_path = tmp_path / "best_movement.pt"
+    stopper = EarlyStopping(
+        patience=100, path=str(main), monitor="both",
+        head_paths={"habitat": str(hab_path), "movement": str(mov_path)},
+    )
+
+    # habitat best at epoch 1, movement best at epoch 2
+    rows = [(5.0, 8.5, 4.5), (4.8, 8.1, 4.6), (4.6, 8.3, 4.2)]
+    for epoch, (total, hab, mov) in enumerate(rows):
+        stopper(total, _stamped_model(epoch), val_habitat=hab, val_movement=mov,
+                active=("habitat", "movement"))
+
+    assert load_checkpoint(str(hab_path))["state_dict"]["weight"].item() == 1
+    assert load_checkpoint(str(mov_path))["state_dict"]["weight"].item() == 2
+    # The main checkpoint still follows the combined loss
+    assert load_checkpoint(str(main))["state_dict"]["weight"].item() == 2
+    assert load_checkpoint(str(hab_path))["checkpoint_criterion"] == "habitat"
+
+
+def test_head_paths_survive_a_stage_reset(tmp_path):
+    """reset() clears patience, but must not re-save a worse per-head best."""
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    hab_path = tmp_path / "best_habitat.pt"
+    stopper = EarlyStopping(
+        patience=100, path=str(tmp_path / "best.pt"), monitor="both",
+        head_paths={"habitat": str(hab_path)},
+    )
+    stopper(5.0, _stamped_model(0), val_habitat=8.0, val_movement=4.0,
+            active=("habitat",))
+    stopper.reset()   # stage boundary
+    stopper(4.0, _stamped_model(1), val_habitat=8.5, val_movement=3.5,
+            active=("habitat", "movement"))
+
+    # Epoch 1's habitat is worse, so the habitat file must still hold epoch 0
+    assert load_checkpoint(str(hab_path))["state_dict"]["weight"].item() == 0
+
+
+def test_early_stopping_rejects_bad_checkpoint_on():
+    from deepssf.train import EarlyStopping
+
+    with pytest.raises(ValueError, match="checkpoint_on"):
+        EarlyStopping(checkpoint_on="habitat")
+    with pytest.raises(ValueError, match="unknown head"):
+        EarlyStopping(head_paths={"bearing": "x.pt"})
+
+
+def test_load_head_weights_loads_only_that_head(tmp_path, small_params):
+    """Loading the habitat head must leave the movement head untouched."""
+    import copy
+
+    from deepssf.train import EarlyStopping, load_head_weights
+
+    model_a, _ = _habitat_model(small_params)
+    model_b, _ = _habitat_model(small_params)   # different random init
+
+    path = tmp_path / "a.pt"
+    EarlyStopping(path=str(path))._save(
+        str(path), 1.0, model_a, criterion=1.0, criterion_name="habitat"
+    )
+
+    before = copy.deepcopy(model_b.state_dict())
+    n_loaded = load_head_weights(str(path), model_b, "habitat")
+    after = model_b.state_dict()
+
+    assert n_loaded == len(list(model_b.conv_habitat.state_dict()))
+    for key in after:
+        if key.startswith("conv_habitat."):
+            assert torch.equal(after[key], model_a.state_dict()[key]), key
+        else:
+            assert torch.equal(after[key], before[key]), key
+
+
+def test_load_head_weights_rejects_unknown_head(tmp_path, small_params):
+    from deepssf.train import EarlyStopping, load_head_weights
+
+    model, _ = _habitat_model(small_params)
+    path = tmp_path / "a.pt"
+    EarlyStopping(path=str(path))._save(
+        str(path), 1.0, model, criterion=1.0, criterion_name="total"
+    )
+    with pytest.raises(ValueError, match="unknown head"):
+        load_head_weights(str(path), model, "bearing")
+
+
+def test_conv_habitat_is_translation_equivariant(small_params):
+    """The habitat CNN must give identical values for identical covariates.
+
+    This is the property that makes predict_habitat_landscape valid at all: the
+    habitat block is convolutions only, with the scalar covariates broadcast to
+    *constant* layers, so it has no positional input and cannot treat "near the
+    animal" differently from "at the window edge".  Everything the joint loss
+    does to the habitat surface therefore happens in covariate space, never in
+    window coordinates.
+
+    Two overlapping crops rather than torch.roll: roll's wrap seam *and* each
+    crop's own zero-padding artifacts otherwise land inside the compared region.
+    """
+    from deepssf.predict import habitat_edge_buffer
+
+    model, n_scalars = _habitat_model(small_params)
+    buf = habitat_edge_buffer(model)
+    n_spatial = 2
+    size, shift = 60, 7
+
+    rng = torch.Generator().manual_seed(0)
+    full = torch.rand(n_spatial, size, size + shift, generator=rng)
+
+    def surface(patch):
+        scalars = torch.zeros(1, n_scalars, patch.shape[-2], patch.shape[-1])
+        with torch.no_grad():
+            return model.conv_habitat.conv2d(
+                torch.cat([patch.unsqueeze(0), scalars], dim=1)
+            ).squeeze()
+
+    left = surface(full[:, :, :size])          # columns 0 .. size-1
+    right = surface(full[:, :, shift:])        # columns shift .. size+shift-1
+
+    rows = slice(buf, size - buf)
+    # The same ground, addressed in each crop's own local coordinates
+    from_left = left[rows, shift + buf : size - buf]
+    from_right = right[rows, buf : size - shift - buf]
+
+    assert from_left.numel() > 0
+    assert torch.equal(from_left, from_right)

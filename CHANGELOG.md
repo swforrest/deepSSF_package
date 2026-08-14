@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
+- **`deepssf.predict.predict_habitat_landscape`** — run the trained habitat
+  filters over an entire raster in one pass, giving a landscape-scale habitat
+  selection surface. The habitat sub-network is fully convolutional (four 3x3
+  convolutions, stride 1, padding 1, no pooling or dense layer), so it is
+  translation-equivariant: a pixel's value is exactly what the model would
+  produce for a window centred on it. The scalar covariates are broadcast to
+  full-landscape layers, since `Scalar_to_Grid_Block`'s output size is pinned to
+  the training window. Processing is chunked by rows with an `edge_buffer`
+  overlap — bit-identical to a single pass, but without the several-hundred-MB
+  activations that can exhaust a GPU. `habitat_edge_buffer` reports the exact
+  border width that zero-padding contaminates (1 px per conv layer, so 4), which
+  is masked to NaN rather than the -inf earlier scripts multiplied through.
+- **`EarlyStopping(checkpoint_on=...)`** and **`EarlyStopping(head_paths=...)`**
+  — see *Fixed* below.
+- **`load_head_weights`** — copy just one head's weights out of a checkpoint,
+  leaving the other head untouched. `HEAD_MODULE_PREFIXES` records the
+  module-to-head mapping, mirroring the split `set_trainable` freezes on.
 - **`simulate_trajectories`** — simulate many trajectories in one call, returning
   them stacked in a long-format DataFrame with `trajectory_id` and `step`
   columns. Three methods: `"batched"` (the default), `"sequential"` (a plain loop
@@ -32,6 +49,40 @@ All notable changes to this project are documented here.
   dependency: `pip install "deepSSF[maps]"`.
 
 ### Fixed
+- **Sub-pixel jitter was hard-coded to a 25 m cell.** `simulate_next_step`
+  scattered each sampled location by a truncated normal on [0, 25] m regardless
+  of the raster's actual resolution. On a 20 m raster that put up to 1.25 cells
+  of noise on every simulated step and pushed locations outside the cell the
+  model had sampled; on a 100 m raster it never left the first quarter of the
+  cell. The cell size now comes from the transform, which is the authority on
+  the grid the model was trained against. **Simulated trajectories will differ
+  from previous versions on any raster that is not 25 m.**
+- **A habitat-only training stage saved the wrong epoch.** The combined loss is
+  `habitat + movement + logZ`, and `logZ = logsumexp(habitat + movement)` — the
+  overlap between the habitat surface and the movement kernel — moves with the
+  habitat weights. The combined loss and the habitat loss are the same
+  used-versus-available contrast measured against different availability sets:
+  the combined loss scores habitat against the cells within reach (~109 effective
+  cells of a 75x75 window on a feral-pig model), the habitat loss against the
+  whole window (~5460). So with movement frozen the combined loss can keep
+  falling — habitat discriminating better among near neighbours — while the
+  density it gives the observed location gets *worse*. Since checkpointing keyed
+  on the combined loss unconditionally, every epoch of such a stage looked like an
+  improvement and overwrote the checkpoint, ending on a habitat surface well past
+  its best — in one feral-pig run, habitat bottomed out at epoch 12 of a 10-epoch
+  stage and then gave back three quarters of what it had learned while the
+  combined loss kept falling.
+  `EarlyStopping(checkpoint_on='active')` now keys the checkpoint on whichever
+  head is training during a single-head stage, falling back to the combined loss
+  when both are; `head_paths=` additionally keeps each head's own best epoch in
+  its own file. The default remains `'total'` — for the finished *joint* model,
+  and for a habitat surface intended as a *selection* map, that is still the
+  right criterion; `'active'` is mainly a diagnostic for whether the habitat head
+  is learning at all. `negativeLogLikeLoss`'s docstring now spells out what `logZ`
+  is, gives the gradients of both criteria, and notes that neither is a spatial
+  operation — the habitat CNN has no positional input and is
+  translation-equivariant, so the difference between them is entirely in which
+  covariate values enter the available side of the contrast.
 - **Environmental layers were not scaled to [0, 1].** `load_environmental_layers`
   divided by the maximum rather than the range — `(data - lo) / hi` instead of
   `(data - lo) / (hi - lo)` — which only lands in [0, 1] when the minimum happens

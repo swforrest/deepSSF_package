@@ -54,6 +54,75 @@ class negativeLogLikeLoss(nn.Module):
     3. Indexes the log-density at the observed next-step pixel coordinates.
     4. Returns ``(total_loss, habitat_loss, movement_loss)``.
 
+    The three returned numbers are related by
+
+    .. code-block:: text
+
+        total_loss = habitat_loss + movement_loss + logZ
+
+    **What logZ is.**  ``logZ`` is step 2's normaliser,
+    ``logsumexp(habitat + movement)`` over the window — the log of
+
+    .. code-block:: text
+
+        Z = sum_over_cells  p_habitat(cell) * p_movement(cell)
+
+    Both surfaces arrive already normalised over the window, so ``Z`` is the
+    *overlap* between them: the average habitat probability weighted by where
+    the movement kernel says the animal could actually go,
+    ``Z = E_movement[p_habitat]``.  It runs from 1 (the two surfaces agree
+    perfectly) down towards 0 (they are concentrated in different places).  A
+    flat habitat surface gives ``Z = 1 / (H*W)``, i.e. ``logZ = -log(H*W)`` —
+    which is why an untrained model reports ``total ≈ movement_loss``, the
+    uniform habitat term and the normaliser cancelling exactly.
+
+    **Why it matters.**  ``logZ`` is the term that makes this a *step
+    selection* likelihood rather than a plain habitat model: it divides out the
+    habitat available within reach, so habitat is fitted against availability
+    rather than against the landscape at large.
+
+    Writing the habitat surface as ``p_habitat = softmax(f)`` over the window,
+    the habitat gradient of the joint loss is
+
+    .. code-block:: text
+
+        d/dtheta [ -log p_habitat(y) + logZ ]  =  E_q[ df/dtheta ] - df(y)/dtheta
+
+    where ``q = p_habitat * p_movement / Z`` is the model's own joint
+    prediction (the ``E_p_habitat`` terms contributed by the two pieces cancel
+    exactly).  Minimising ``habitat_loss`` on its own instead gives
+
+    .. code-block:: text
+
+        d/dtheta [ -log p_habitat(y) ]        =  E_p_habitat[ df/dtheta ] - df(y)/dtheta
+
+    Both are the same used-versus-available contrast: raise ``f`` at the
+    observed cell, lower it at cells drawn from an availability distribution.
+    They differ *only* in that distribution — the joint loss draws availability
+    from ``q``, concentrated on the cells actually within reach, while
+    ``habitat_loss`` draws it from ``p_habitat`` spread over the whole window.
+    On a trained feral-pig model those sets have effective sizes (``exp`` of
+    their entropy) of about 109 and 5460 cells of a 75x75 window, and the
+    available covariates sit roughly 2.3x closer to the used cell's under the
+    first than the second.
+
+    Note that neither is a *spatial* operation.  The habitat CNN has no
+    positional input — the scalar covariates are broadcast to constant layers —
+    so it is translation-equivariant and cannot treat "near the animal"
+    differently from "at the window edge"; identical covariates always get an
+    identical value.  What changes between the two criteria is purely which
+    covariate values enter the available side of the contrast.
+
+    The practical consequence is that ``total_loss`` is not monotone in
+    ``habitat_loss``: filters fitted to discriminate among near-identical
+    neighbours are not the filters that best separate the used cell from the
+    whole window, so the two can move in opposite directions.  ``logZ`` falling
+    while ``habitat_loss`` rises is a *symptom* of that sharpening — with one
+    chosen cell pushed up and its many unchosen neighbours pushed down,
+    ``E_movement[p_habitat]`` falls on average — not a loophole the model is
+    exploiting.  It does mean "best joint model" and "best habitat surface" can
+    be different epochs; see ``EarlyStopping(checkpoint_on=...)``.
+
     Parameters
     ----------
     reduction:
@@ -174,11 +243,62 @@ class EarlyStopping:
         movement's epoch-to-epoch noise, and monitoring the total alone ends the
         run on movement's schedule while habitat is still learning.
 
+    checkpoint_on:
+        Which loss decides that an epoch is a new best worth saving.
+
+        ``'total'`` (default) always uses the combined validation loss — the
+        joint likelihood, and the right criterion for the finished model.
+
+        ``'active'`` uses the combined loss only while *every* head is
+        training, and during a single-head stage keys the checkpoint on that
+        head's own loss instead.
+
+        This matters because the combined loss is ``habitat + movement +
+        logZ``, and ``logZ`` — the overlap between the habitat surface and the
+        movement kernel — moves with the habitat weights.  The two losses are
+        the same used-versus-available contrast measured against different
+        availability sets: the combined loss against the cells within reach,
+        ``habitat`` alone against the whole window (see
+        :class:`negativeLogLikeLoss` for the gradients).  So in a habitat-only
+        stage, where the movement term is pinned, the combined loss can keep
+        falling — habitat discriminating better among near neighbours — while
+        the density habitat gives the observed location gets *worse*.  A
+        checkpoint is then written every epoch, ending on a habitat surface
+        well past its best.
+
+        Which criterion you want is a real choice, not a bug to be fixed.
+        ``'total'`` selects the best joint step-selection model, with habitat
+        fitted against availability — that is the classical iSSF estimand, and
+        the right one if the habitat surface is going to be mapped as a
+        *selection* surface with ``predict_habitat_landscape``.  ``'active'``
+        answers a different, RSF-flavoured question: which habitat surface best
+        predicts used locations against uniform availability across the window.
+        Its main use is as a **diagnostic** — it tells you whether the habitat
+        head is learning anything at all, and keeps the epoch where it had
+        learned the most.
+
+        Keep the magnitudes in view before tuning this.  On a feral-pig run the
+        habitat head sat only ~0.04-0.15 nats below a uniform surface while
+        movement was ~4.4 nats below it, so the whole best-epoch question moved
+        a component worth a few percent of the model's predictive power.
+
+        Changing criterion mid-run resets ``best_score``: a habitat-only loss
+        and a combined loss are not on the same scale, so the first epoch of a
+        new stage always saves under ``'active'``.
+    head_paths:
+        Optional ``{'habitat': path, 'movement': path}``.  When given, each
+        head *also* gets its own checkpoint, written whenever that head's
+        validation loss reaches a new low, independently of the stage schedule
+        and of *checkpoint_on*.  Use this to keep the best habitat surface of
+        the whole run even though a later joint stage moves it — read one back
+        with :func:`load_head_weights`.
+
     Notes
     -----
-    The checkpoint is always keyed on the *combined* validation loss regardless
-    of ``monitor``: the joint likelihood is the correct model-selection
-    criterion.  ``monitor`` changes only when training is allowed to stop.
+    Every checkpoint holds the **whole** ``model.state_dict()`` — both heads,
+    always.  The heads are not stored in separate files unless *head_paths*
+    asks for it, and even then each file is a complete model; what differs is
+    the epoch it was captured at.
 
 
     The checkpoint is a dict with ``deepssf_checkpoint_format``,
@@ -200,9 +320,20 @@ class EarlyStopping:
         path: str = "checkpoint.pt",
         trace_func=print,
         monitor: str = "total",
+        checkpoint_on: str = "total",
+        head_paths: dict[str, str] | None = None,
     ) -> None:
         if monitor not in ("total", "both"):
             raise ValueError("monitor must be 'total' or 'both'")
+        if checkpoint_on not in ("total", "active"):
+            raise ValueError("checkpoint_on must be 'total' or 'active'")
+        if head_paths:
+            unknown = set(head_paths) - set(self.HEADS)
+            if unknown:
+                raise ValueError(
+                    f"unknown head(s) in head_paths: {sorted(unknown)}; "
+                    f"expected a subset of {self.HEADS}"
+                )
 
         self.patience    = patience
         self.verbose     = verbose
@@ -210,6 +341,8 @@ class EarlyStopping:
         self.path        = path
         self.trace_func  = trace_func
         self.monitor     = monitor
+        self.checkpoint_on = checkpoint_on
+        self.head_paths  = dict(head_paths) if head_paths else {}
 
         self.counter     = 0
         self.best_score  = None
@@ -219,6 +352,14 @@ class EarlyStopping:
         # Per-head patience state, used when monitor='both'
         self._head_best: dict[str, float | None] = {h: None for h in self.HEADS}
         self._head_counter: dict[str, int] = {h: 0 for h in self.HEADS}
+
+        # Which loss the current checkpoint's best_score refers to.  Scores from
+        # two different criteria cannot be compared, so a change forces a reset.
+        self._criterion_key: tuple[str, ...] | None = None
+        # Best-ever per-head loss for head_paths.  Deliberately separate from
+        # _head_best, which reset() clears at every stage boundary — these
+        # follow the whole run.
+        self._head_ckpt_best: dict[str, float | None] = {h: None for h in self.HEADS}
 
     def reset(self) -> None:
         """Clear the patience counters and the stop flag.
@@ -257,14 +398,69 @@ class EarlyStopping:
             frozen sub-network cannot improve, so counting its patience would
             end the stage for a head that was never given the chance to learn.
         """
+        components = {"habitat": val_habitat, "movement": val_movement}
+        active = tuple(active)
+        unknown = set(active) - set(self.HEADS)
+        if unknown:
+            raise ValueError(
+                f"unknown component(s) in active: {sorted(unknown)}; "
+                f"expected a subset of {self.HEADS}"
+            )
+
+        # --- Choose the criterion that decides "is this a new best?" ---------
+        criterion, criterion_key = val_loss, ("total",)
+        if (
+            self.checkpoint_on == "active"
+            and active
+            and set(active) != set(self.HEADS)
+        ):
+            missing = [h for h in active if components[h] is None]
+            if missing:
+                raise ValueError(
+                    f"checkpoint_on='active' requires {' and '.join(missing)} "
+                    "validation loss; pass val_habitat= and val_movement= from "
+                    "the epoch's validation pass."
+                )
+            criterion = sum(components[h] for h in active)
+            criterion_key = active
+
+        if criterion_key != self._criterion_key:
+            # A habitat-only loss and a combined loss are on different scales,
+            # so carrying best_score across the boundary would either freeze
+            # checkpointing or save unconditionally. Start the new criterion fresh.
+            self.best_score = None
+            self.val_loss_min = float("inf")
+            self._criterion_key = criterion_key
+
         # Negate loss so higher score = better (allows simple "did we improve?" check)
-        score = -val_loss
+        score = -criterion
         improved = self.best_score is None or score >= self.best_score + self.delta
 
         if improved:
-            # First epoch, or a new best: save the checkpoint
+            # First epoch under this criterion, or a new best: save the checkpoint
             self.best_score = score
-            self._save(val_loss, model)
+            self._save(
+                self.path, val_loss, model,
+                criterion=criterion, criterion_name="+".join(criterion_key),
+            )
+
+        # --- Per-head checkpoints, if asked for ------------------------------
+        # Tracked over the whole run, so a later joint stage cannot overwrite
+        # the epoch at which a head was individually at its best.
+        for head, head_path in self.head_paths.items():
+            head_loss = components[head]
+            if head_loss is None:
+                raise ValueError(
+                    f"head_paths includes {head!r} but no val_{head} was passed; "
+                    "pass val_habitat= and val_movement= from the validation pass."
+                )
+            best = self._head_ckpt_best[head]
+            if best is None or head_loss <= best - self.delta:
+                self._head_ckpt_best[head] = head_loss
+                self._save(
+                    head_path, val_loss, model,
+                    criterion=head_loss, criterion_name=head,
+                )
 
         if self.monitor == "total":
             self.counter = 0 if improved else self.counter + 1
@@ -278,21 +474,12 @@ class EarlyStopping:
         # monitor == 'both': each component keeps its own patience budget, so a
         # plateaued movement head cannot end a run in which habitat is still
         # improving (and vice versa).
-        components = {"habitat": val_habitat, "movement": val_movement}
         missing = [h for h, v in components.items() if v is None]
         if missing:
             raise ValueError(
                 f"monitor='both' requires {' and '.join(missing)} validation "
                 "loss; pass val_habitat= and val_movement= from the epoch's "
                 "validation pass."
-            )
-
-        active = tuple(active)
-        unknown = set(active) - set(self.HEADS)
-        if unknown:
-            raise ValueError(
-                f"unknown component(s) in active: {sorted(unknown)}; "
-                f"expected a subset of {self.HEADS}"
             )
 
         for head in self.HEADS:
@@ -317,11 +504,31 @@ class EarlyStopping:
             self._head_counter[h] >= self.patience for h in active
         )
 
-    def _save(self, val_loss: float, model: nn.Module) -> None:
-        if self.verbose:
+    def _save(
+        self,
+        path: str,
+        val_loss: float,
+        model: nn.Module,
+        *,
+        criterion: float,
+        criterion_name: str,
+    ) -> None:
+        """Write a checkpoint.
+
+        ``val_loss`` is always the combined validation loss, so the field keeps
+        the same meaning in every file.  ``criterion``/``criterion_name`` record
+        which loss actually decided this was the best epoch — they differ from
+        ``val_loss`` for a per-head file or under ``checkpoint_on='active'``.
+        """
+        is_main = path == self.path
+        if self.verbose and is_main:
             self.trace_func(
-                f"Validation loss decreased "
-                f"({self.val_loss_min:.6f} → {val_loss:.6f}). Saving model…"
+                f"{criterion_name} validation loss decreased "
+                f"({self.val_loss_min:.6f} → {criterion:.6f}). Saving model…"
+            )
+        elif self.verbose:
+            self.trace_func(
+                f"  new best {criterion_name} ({criterion:.6f}) → {path}"
             )
         # Deferred import: deepssf/__init__ imports this module, so importing it
         # at module scope would be circular.
@@ -332,11 +539,14 @@ class EarlyStopping:
                 "deepssf_checkpoint_format": CHECKPOINT_FORMAT,
                 "deepssf_version": __version__,
                 "val_loss": float(val_loss),
+                "checkpoint_criterion": criterion_name,
+                "checkpoint_score": float(criterion),
                 "state_dict": model.state_dict(),
             },
-            self.path,
+            path,
         )
-        self.val_loss_min = val_loss
+        if is_main:
+            self.val_loss_min = criterion
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +629,82 @@ def _grads_are_finite(model: nn.Module) -> bool:
         for p in model.parameters()
         if p.grad is not None
     )
+
+
+#: Which ``ConvJointModel`` sub-modules belong to which head.  Mirrors the
+#: split :func:`set_trainable` freezes on, and is what lets one head's weights
+#: be pulled out of a full checkpoint.
+HEAD_MODULE_PREFIXES: dict[str, tuple[str, ...]] = {
+    "habitat": ("conv_habitat.",),
+    "movement": ("conv_movement.", "fcn_movement_all.", "movement_grid_output."),
+}
+
+
+def load_head_weights(
+    path: str,
+    model: nn.Module,
+    head: str,
+    *,
+    map_location=None,
+) -> int:
+    """Load *only* one sub-network's weights from a checkpoint.
+
+    Checkpoints always contain the whole model, so loading a per-head file with
+    :func:`load_checkpoint` would bring the other head along with it — at
+    whatever epoch that file happened to be written.  This copies across just
+    the modules belonging to *head* and leaves the rest of *model* untouched.
+
+    The usual pattern with ``EarlyStopping(head_paths=...)`` is to load the
+    final joint model normally and then overwrite one head::
+
+        load_checkpoint("best_model.pt", model)
+        load_head_weights("best_model_habitat.pt", model, "habitat")
+
+    Note that this is a deliberate mix-and-match: the two heads then come from
+    different epochs, so the *joint* likelihood of the result is not what
+    either checkpoint recorded.  It gives the best habitat surface, not the
+    best joint model.
+
+    Parameters
+    ----------
+    path:
+        Checkpoint to read.
+    model:
+        Model to load into, modified in place.
+    head:
+        ``'habitat'`` or ``'movement'``.
+    map_location:
+        Passed to :func:`torch.load`.
+
+    Returns
+    -------
+    int
+        How many tensors were copied.
+    """
+    if head not in HEAD_MODULE_PREFIXES:
+        raise ValueError(
+            f"unknown head {head!r}; expected one of "
+            f"{sorted(HEAD_MODULE_PREFIXES)}"
+        )
+
+    state = load_checkpoint(path, map_location=map_location)["state_dict"]
+    prefixes = HEAD_MODULE_PREFIXES[head]
+    subset = {k: v for k, v in state.items() if k.startswith(prefixes)}
+    if not subset:
+        raise RuntimeError(
+            f"No {head} parameters found in {path}; the checkpoint holds "
+            f"{sorted({k.split('.')[0] for k in state})}"
+        )
+
+    # strict=False because `subset` is by construction missing the other head;
+    # unexpected keys would mean the checkpoint does not match this model.
+    incompatible = model.load_state_dict(subset, strict=False)
+    if incompatible.unexpected_keys:
+        raise RuntimeError(
+            f"Checkpoint {path} has parameters this model does not: "
+            f"{incompatible.unexpected_keys}"
+        )
+    return len(subset)
 
 
 def set_trainable(model: nn.Module, *, habitat: bool, movement: bool) -> None:

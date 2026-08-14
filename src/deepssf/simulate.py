@@ -25,6 +25,18 @@ def _day_to_month_index(day_of_year: float, base_year: int = 2018) -> int:
     return (date.month - 1) + (date.year - base.year) * 12
 
 
+def _pixel_size_from_transform(transform) -> tuple[float, float, float]:
+    """Cell size in CRS units from an Affine transform, plus the y direction.
+
+    Returns ``(size_x, size_y, y_sign)``.  ``y_sign`` is -1 for the usual
+    north-up raster (``transform.e < 0``), where y decreases as the row index
+    increases, and +1 otherwise; it tells the caller which way to move from the
+    pixel's upper-left corner (what ``transform * (col, row)`` returns) into the
+    cell itself.
+    """
+    return abs(transform.a), abs(transform.e), (-1.0 if transform.e < 0 else 1.0)
+
+
 def make_simulation_inputs(
     n_steps: int,
     starting_yday: float,
@@ -165,21 +177,18 @@ def simulate_next_step(
     new_py = origin_ys[0] + sampled_row
     new_x, new_y = transform * (new_px, new_py)  # type: ignore[operator]
 
-    # Sub-pixel jitter: uniform-ish within one cell (~95% within [0,25] / [-25,0])
-    # Adds positional uncertainty below the pixel resolution to avoid all simulated
-    # locations snapping to pixel-centre coordinates.
-    while True:
-        jitter_x = np.random.normal(12.5, 6.5)
-        if 0.0 <= jitter_x <= 25.0:
-            break
-    while True:
-        jitter_y = np.random.normal(-12.5, 6.5)
-        if -25.0 <= jitter_y <= 0.0:
-            break
+    # Sub-pixel jitter: adds positional uncertainty below the raster resolution
+    # so simulated locations do not all snap to the pixel-corner lattice.  The
+    # cell size comes from the transform — hard-coding it (as versions ≤ 0.3.0
+    # did, at 25 m) puts the jitter on the wrong scale for every other raster,
+    # and on a finer raster scatters locations outside the sampled cell.
+    size_x, size_y, y_sign = _pixel_size_from_transform(transform)
+    jitter_x = _truncated_normal(1, size_x / 2, size_x * 0.26, 0.0, size_x)[0]
+    jitter_y = _truncated_normal(1, size_y / 2, size_y * 0.26, 0.0, size_y)[0]
 
     return (
         float(new_x) + jitter_x,
-        float(new_y) + jitter_y,
+        float(new_y) + y_sign * jitter_y,
         # hab_log_prob.squeeze().cpu(),
         # move_log_prob.squeeze().cpu(),
         # step_log_prob.squeeze().cpu(),
@@ -462,9 +471,10 @@ def simulate_trajectories_batched(
         Device to run on.  Defaults to the device the model is already on.
     pixel_size:
         ``(size_x, size_y)`` in CRS units, used to scale the sub-pixel jitter.
-        Defaults to the resolution implied by *transform*.  (Note that
-        :func:`simulate_next_step` hard-codes a 25 m cell, so a batched run and
-        a sequential run differ slightly on rasters of any other resolution.)
+        Defaults to the resolution implied by *transform*, which is what
+        :func:`simulate_next_step` also uses — only pass this to override it
+        (e.g. for a rotated transform, where ``transform.a`` is not the cell
+        width).
 
     Returns
     -------
@@ -487,11 +497,9 @@ def simulate_trajectories_batched(
 
     # Jitter is applied from the pixel's upper-left corner, so its sign follows
     # the transform: +x eastwards, and -y for the usual north-up raster.
-    if pixel_size is None:
-        size_x, size_y = abs(transform.a), abs(transform.e)  # type: ignore[attr-defined]
-    else:
+    size_x, size_y, y_sign = _pixel_size_from_transform(transform)
+    if pixel_size is not None:
         size_x, size_y = float(pixel_size[0]), float(pixel_size[1])
-    y_sign = -1.0 if transform.e < 0 else 1.0  # type: ignore[attr-defined]
 
     x2_full, hour_t2, yday_t2 = make_simulation_inputs(
         n_steps, starting_yday, starting_hour, time_between_steps
