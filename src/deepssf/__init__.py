@@ -30,6 +30,7 @@ from deepssf.train import (
     load_checkpoint,
     make_optimisers,
     negativeLogLikeLoss,
+    set_trainable,
     test_loop,
     train_loop,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "train_loop",
     "test_loop",
     "make_optimisers",
+    "set_trainable",
     "fit",
     # data
     "MovementDataset",

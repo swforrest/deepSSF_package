@@ -3,6 +3,7 @@
 Run with:  pytest
 """
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -146,6 +147,68 @@ def test_day_to_month_index():
     assert day_to_month_index(1) == 1
     # Day ~180 should map to June/July
     assert 6 <= day_to_month_index(180) <= 7
+
+
+def _write_tif(path, data):
+    """Write a [bands, H, W] float array to a GeoTIFF at *path*."""
+    import rasterio
+    import rasterio.transform
+
+    bands, height, width = data.shape
+    with rasterio.open(
+        path, "w", driver="GTiff", height=height, width=width, count=bands,
+        dtype="float32",
+        transform=rasterio.transform.from_bounds(0, 0, width, height, width, height),
+    ) as dst:
+        dst.write(data.astype("float32"))
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [-10000.0, 0.0, 10000.0],   # S2 indices x10 000: used to give [0, 2]
+        [-100.0, -55.0, -10.0],     # all negative: used to flip sign and axis
+        [0.0, 50.0, 100.0],         # lo == 0: the only case the old form got right
+        [3.0, 3.0, 3.0],            # constant: used to divide by zero
+    ],
+)
+def test_environmental_layers_scaled_to_unit_range(tmp_path, values):
+    """Every .tif layer must land in [0, 1] whatever its original range.
+
+    Regression test: the scaling divided by the maximum rather than the range,
+    which only lands in [0, 1] when the minimum happens to be zero.
+    """
+    from deepssf.data import load_environmental_layers
+
+    path = tmp_path / "layer.tif"
+    _write_tif(path, np.array(values, dtype="float32").reshape(1, 1, 3))
+
+    layers, _transform = load_environmental_layers({"layer": str(path)})
+    scaled = layers["layer"]
+
+    assert scaled.min() >= 0.0
+    assert scaled.max() <= 1.0
+    if len(set(values)) > 1:
+        # Non-constant layers use the full range and stay monotonic in the input.
+        assert scaled.min() == pytest.approx(0.0)
+        assert scaled.max() == pytest.approx(1.0)
+        assert np.all(np.diff(scaled.ravel()) > 0)
+    else:
+        assert np.all(scaled == 0.0)
+
+
+def test_environmental_layers_multiband_scaled_jointly(tmp_path):
+    """Bands of one TIFF share a scaling, so relative magnitudes survive."""
+    from deepssf.data import load_environmental_layers
+
+    path = tmp_path / "multi.tif"
+    data = np.array([[[0.0, 5.0]], [[10.0, 20.0]]], dtype="float32")  # 2 bands
+    _write_tif(path, data)
+
+    scaled = load_environmental_layers({"multi": str(path)})[0]["multi"]
+    assert scaled.shape == (2, 1, 2)
+    # Scaled by the global range (0..20), not per band.
+    assert scaled.ravel() == pytest.approx([0.0, 0.25, 0.5, 1.0])
 
 
 # ---------------------------------------------------------------------------
@@ -792,10 +855,229 @@ def test_fit_returns_loss_history(small_params):
     )
     assert set(history.keys()) == {
         "train_losses", "val_losses",
-        "val_habitat_losses", "val_movement_losses",
+        "val_habitat_losses", "val_movement_losses", "stage",
     }
-    assert len(history["train_losses"]) == 2
-    assert len(history["val_losses"]) == 2
+    # Index 0 is the pre-training baseline, so 2 epochs give 3 rows.
+    assert len(history["train_losses"]) == 3
+    assert len(history["val_losses"]) == 3
+    assert math.isnan(history["train_losses"][0])
+    assert history["stage"] == [-1, 0, 0]
+    # An untrained habitat surface is close to uniform over the H x H window.
+    assert history["val_habitat_losses"][0] == pytest.approx(math.log(H * H), abs=0.1)
+
+
+def _joint_model_and_loader(small_params):
+    """Build a tiny ConvJointModel plus a fake (train == val) DataLoader.
+
+    Mirrors the setup in :func:`test_fit_returns_loss_history`; the flattened
+    dimension has to be derived from image_dim because Conv2d_block_toFC
+    max-pools three times.
+    """
+    from deepssf.model import ConvJointModel, ModelParams
+    from deepssf.utils import get_device
+
+    dim = small_params.image_dim
+    for _ in range(3):
+        dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
+        dim = math.floor((dim - 2) / 2 + 1)
+    flat = small_params.output_channels * dim * dim
+    params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
+    model = ConvJointModel(params).to(get_device())
+
+    n_spatial = params.input_channels - params.dim_in_nonspatial_to_grid
+    H = params.image_dim
+    S = params.dim_in_nonspatial_to_grid
+
+    class _DS:
+        def __len__(self):
+            return 4
+
+    class _DL:
+        dataset = _DS()
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            for _ in range(2):
+                yield (
+                    torch.randn(2, n_spatial, H, H),
+                    torch.randn(2, S),
+                    torch.zeros(2, 1),
+                    (
+                        torch.full((2,), H // 2, dtype=torch.long),
+                        torch.full((2,), H // 2, dtype=torch.long),
+                    ),
+                    ("t", "t"),
+                )
+
+    return model, params, _DL()
+
+
+def test_make_optimisers_owns_every_parameter(small_params):
+    """Every model parameter belongs to exactly one optimiser.
+
+    Regression test: conv_movement used to be in neither optimiser, so it was
+    never zeroed or stepped.  Its gradients accumulated across the whole run
+    until they overflowed, at which point _grads_are_finite (which scans every
+    parameter) failed and silently skipped every update, habitat included.
+    """
+    from deepssf.train import make_optimisers
+
+    model, _params, _dl = _joint_model_and_loader(small_params)
+    optimisers, _schedulers = make_optimisers(model)
+
+    owners: dict[int, int] = {}
+    for i, opt in enumerate(optimisers):
+        for group in opt.param_groups:
+            for param in group["params"]:
+                assert id(param) not in owners, "parameter owned by two optimisers"
+                owners[id(param)] = i
+
+    unowned = [
+        name for name, param in model.named_parameters() if id(param) not in owners
+    ]
+    assert unowned == [], f"parameters owned by no optimiser: {unowned}"
+
+
+def test_train_loop_leaves_no_stale_gradients(small_params):
+    """After an epoch, no parameter is left holding an un-zeroed gradient."""
+    from deepssf.train import make_optimisers, negativeLogLikeLoss, train_loop
+
+    model, _params, dl = _joint_model_and_loader(small_params)
+    optimisers, _ = make_optimisers(model)
+    train_loop(dl, model, negativeLogLikeLoss(reduction="mean"), optimisers)
+
+    for name, param in model.named_parameters():
+        assert param.grad is None or torch.isfinite(param.grad).all(), name
+
+
+def test_stages_freeze_the_inactive_subnetwork(small_params):
+    """A sub-network excluded from a stage's 'train' set must not change."""
+    from deepssf.train import fit, make_optimisers, negativeLogLikeLoss
+
+    model, params, dl = _joint_model_and_loader(small_params)
+    optimisers, schedulers = make_optimisers(model, lr_habitat=1e-1, lr_movement=1e-1)
+
+    frozen_before = {
+        name: param.detach().clone()
+        for name, param in model.named_parameters()
+        if name.startswith("conv_habitat")
+    }
+    movement_before = {
+        name: param.detach().clone()
+        for name, param in model.named_parameters()
+        if name.startswith(("conv_movement", "fcn_movement_all"))
+    }
+
+    history = fit(
+        model,
+        image_trim_pixels=3,
+        window_size=params.image_dim,
+        dl_train=dl,
+        dl_val=dl,
+        loss_fn=negativeLogLikeLoss(reduction="mean"),
+        optimisers=optimisers,
+        schedulers=schedulers,
+        stages=[{"epochs": 2, "train": ("movement",)}],
+        snapshot_dir=None,
+    )
+
+    for name, before in frozen_before.items():
+        assert torch.equal(before, dict(model.named_parameters())[name]), (
+            f"{name} changed during a movement-only stage"
+        )
+    # ...and the active branch did move, so the test is not vacuous.
+    assert any(
+        not torch.equal(before, dict(model.named_parameters())[name])
+        for name, before in movement_before.items()
+    )
+    assert history["stage"] == [-1, 0, 0]
+
+
+def test_early_stopping_monitor_both_waits_for_both_heads(tmp_path):
+    """A plateaued head cannot stop a run while the other is still improving."""
+    from deepssf.train import EarlyStopping
+
+    model = torch.nn.Linear(1, 1)
+    es = EarlyStopping(
+        patience=2, monitor="both", path=str(tmp_path / "ckpt.pt"),
+        trace_func=lambda _: None,
+    )
+
+    # Movement plateaued (drifting slightly worse), habitat improving every
+    # epoch: movement's counter maxes out but must not end the run.  Note that
+    # with delta=0 an exactly-unchanged loss counts as an improvement, which is
+    # why a plateau is modelled as a small upward drift.
+    for i in range(6):
+        es(
+            val_loss=10.0 - i, model=model,
+            val_habitat=10.0 - i, val_movement=5.0 + 0.01 * i,
+        )
+        assert not es.early_stop, f"stopped at epoch {i} while habitat improving"
+    assert es._head_counter["movement"] >= es.patience
+    assert es._head_counter["habitat"] == 0
+
+    # Habitat now plateaus too — both counters reach patience and the run ends.
+    for i in range(2):
+        es(
+            val_loss=5.5, model=model,
+            val_habitat=5.5 + 0.01 * i, val_movement=5.1 + 0.01 * i,
+        )
+    assert es.early_stop
+
+    # reset() clears counters so a new stage starts with a full patience budget,
+    # while leaving the best score and saved checkpoint intact.
+    best_before = es.best_score
+    es.reset()
+    assert not es.early_stop
+    assert es.best_score == best_before
+    es(val_loss=5.5, model=model, val_habitat=5.6, val_movement=5.2)
+    assert not es.early_stop
+
+
+def test_early_stopping_monitor_both_requires_components(tmp_path):
+    from deepssf.train import EarlyStopping
+
+    es = EarlyStopping(monitor="both", path=str(tmp_path / "ckpt.pt"))
+    with pytest.raises(ValueError, match="requires"):
+        es(val_loss=1.0, model=torch.nn.Linear(1, 1))
+
+    with pytest.raises(ValueError, match="monitor must be"):
+        EarlyStopping(monitor="habitat")
+
+
+def test_early_stopping_monitor_total_unchanged(tmp_path):
+    """The default monitor still counts patience against the combined loss."""
+    from deepssf.train import EarlyStopping
+
+    model = torch.nn.Linear(1, 1)
+    es = EarlyStopping(patience=2, path=str(tmp_path / "ckpt.pt"),
+                       trace_func=lambda _: None)
+    es(val_loss=1.0, model=model)
+    assert not es.early_stop
+    es(val_loss=2.0, model=model)
+    assert not es.early_stop
+    es(val_loss=2.0, model=model)
+    assert es.early_stop
+
+
+@pytest.mark.parametrize(
+    "stages, match",
+    [
+        ([], "non-empty"),
+        ([{"epochs": 0, "train": ("habitat",)}], "epochs must be"),
+        ([{"epochs": 1, "train": ()}], "at least one component"),
+        ([{"epochs": 1, "train": ("hab",)}], "unknown component"),
+        ([{"epochs": 1, "train": ("habitat",), "lr": 1.0}], "unknown key"),
+        ([{"train": ("habitat",)}], "missing key"),
+    ],
+)
+def test_stages_validation(stages, match):
+    from deepssf.train import _normalise_stages
+
+    with pytest.raises(ValueError, match=match):
+        _normalise_stages(stages, n_epochs=1)
 
 
 @pytest.mark.skipif(not _CSV_PATH.exists(), reason="test dataset not found")

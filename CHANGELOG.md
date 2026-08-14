@@ -5,6 +5,36 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Fixed
+- **Environmental layers were not scaled to [0, 1].** `load_environmental_layers`
+  divided by the maximum rather than the range — `(data - lo) / hi` instead of
+  `(data - lo) / (hi - lo)` — which only lands in [0, 1] when the minimum happens
+  to be zero. Sentinel-2 indices stored as ×10 000 (`lo=-10000, hi=10000`) came
+  out in [0, 2]; an all-negative layer came out negative *and* axis-flipped,
+  reversing the sign of everything the habitat CNN learned from it; a layer with
+  `hi == 0` divided by zero. A constant layer now maps to a flat 0 instead of
+  raising. **Checkpoints trained on the old scaling will not transfer** — the
+  inputs have changed, so retrain.
+- **`conv_movement` was registered with no optimiser.** `make_optimisers` covered
+  only `fcn_movement_all` and `conv_habitat`, so the movement CNN trunk received
+  gradients on every `backward()` but was never zeroed and never stepped. Its
+  `.grad` accumulated monotonically across the whole run: the trunk stayed at its
+  random initialisation, and once the buffer overflowed `_grads_are_finite` —
+  which iterates over every parameter — began returning `False`, silently
+  skipping *every* subsequent update, habitat's included. `conv_movement` now
+  sits in the movement optimiser alongside `fcn_movement_all`.
+- `train_loop` zeroes gradients with `model.zero_grad(set_to_none=True)` rather
+  than per-optimiser, so no parameter can be left out of the reset however the
+  optimisers are configured. The manual stash-and-restore of habitat gradients
+  around the two optimiser steps has been removed: the optimisers own disjoint
+  parameter sets and `Adam.step()` only reads `.grad` for its own parameters, so
+  it was a no-op.
+- **Both learning-rate schedulers stepped on the combined validation loss.** That
+  loss is `habitat + movement + logZ` and is dominated by the movement component
+  (~1.2 nats of movement against ~0.05 of habitat over a typical run), so the
+  habitat learning rate was being cut whenever the *movement* head plateaued.
+  Each scheduler now steps on its own component, and only while that component is
+  training — stepping a frozen head's scheduler would penalise it for an
+  improvement it was never given the chance to make.
 - **NaN movement probability surfaces during training.** In float32 the von
   Mises normaliser `I₀(κ)` overflows to `inf` at κ ≈ 89 — reachable from a raw
   FCN output of only `log(89) ≈ 4.5`. With both mixture components overflowing,
@@ -35,6 +65,15 @@ All notable changes to this project are documented here.
   the log-density (dividing the density by `r`), not "by `log(r)`".
 
 ### Changed
+- **Breaking:** `skip_epoch0_training` has been removed from `train_loop`. It had
+  no epoch awareness — it was a per-call switch that `fit` never passed, so its
+  default applied to *every* epoch, and with that default at `True` an entire run
+  executed forward-only under `torch.set_grad_enabled(False)`. It also measured a
+  training-set baseline when the useful number is a validation one. `fit` now runs
+  one validation pass before the first epoch and records it at index 0 of every
+  history list, with `train_losses[0] = nan`.
+- `history` gains a `stage` key recording which stage each epoch belonged to
+  (`-1` for the pre-training baseline row).
 - **Breaking (checkpoints):** mixture weights are now `log_softmax` over the raw
   FCN outputs. Previously `softmax(exp(raw))` was applied — a double exponential
   that saturated to exactly `(1, 0)` by a raw value of ≈ 4.75, zeroing the weight
@@ -50,6 +89,27 @@ All notable changes to this project are documented here.
   materialising a `[B, H, W]` copy per parameter.
 
 ### Added
+- **`EarlyStopping(monitor='both')`.** Keeps a separate patience budget for the
+  habitat and movement components and stops only once every active component has
+  plateaued, so a converged movement head can no longer end a run in which habitat
+  is still improving. Checkpointing still keys on the combined loss — the joint
+  likelihood remains the right model-selection criterion; only the stopping rule
+  changes. `reset()` clears the counters at stage boundaries while leaving the
+  best score and saved checkpoint intact.
+- **`fit(stages=...)`** runs the sub-networks as a coordinate ascent on the same
+  joint likelihood, e.g. movement alone to establish an availability kernel, then
+  habitat alone to its own convergence, then both. A frozen branch keeps
+  contributing its surface to the loss as a fixed offset; only its weights stop
+  moving, so the objective is unchanged rather than reweighted. This is not what
+  `negativeLogLikeLoss(freeze_movement=True)` does — that flag *drops* the movement
+  surface from the loss, which would make the habitat head learn a distance-decay
+  bump in order to explain the movement structure itself. Early stopping ends the
+  current stage and advances to the next. `reset_optimiser_state` (default `True`)
+  clears the Adam moments of a branch when it becomes active again.
+- `set_trainable(model, *, habitat, movement)` toggles `requires_grad` per
+  sub-network. Exported from the package root.
+- See `Habitat_movement_loss_balancing.md` for why the fix for the
+  habitat/movement asymmetry is a monitoring change rather than a loss weight.
 - **Versioned checkpoints.** `EarlyStopping` now writes a dict with
   `deepssf_checkpoint_format`, `deepssf_version`, `val_loss` and `state_dict`
   keys instead of a bare `state_dict` (`CHECKPOINT_FORMAT = 2`). Because the

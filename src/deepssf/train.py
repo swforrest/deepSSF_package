@@ -160,9 +160,27 @@ class EarlyStopping:
         File path for the saved checkpoint.
     trace_func:
         Callable used for log messages (default: ``print``).
+    monitor:
+        ``'total'`` (default) counts patience against the combined validation
+        loss.  ``'both'`` counts patience separately for the habitat and
+        movement components and stops only once *every* active component has
+        plateaued.
+
+        Use ``'both'`` for the joint model.  The combined loss is
+        ``habitat + movement + logZ``, and because the movement surface is
+        sharply peaked on the central pixels it improves by far more over a run
+        than the diffuse habitat surface does — in a typical feral-pig run,
+        ~1.2 nats against ~0.05.  Habitat's improvement therefore sits inside
+        movement's epoch-to-epoch noise, and monitoring the total alone ends the
+        run on movement's schedule while habitat is still learning.
 
     Notes
     -----
+    The checkpoint is always keyed on the *combined* validation loss regardless
+    of ``monitor``: the joint likelihood is the correct model-selection
+    criterion.  ``monitor`` changes only when training is allowed to stop.
+
+
     The checkpoint is a dict with ``deepssf_checkpoint_format``,
     ``deepssf_version``, ``val_loss`` and ``state_dict`` keys (see
     :data:`CHECKPOINT_FORMAT`), not a bare ``state_dict`` as in ≤ 0.2.3.  Read it
@@ -172,6 +190,8 @@ class EarlyStopping:
         state = load_checkpoint(path)["state_dict"]   # or just the weights
     """
 
+    HEADS = ("habitat", "movement")
+
     def __init__(
         self,
         patience: int = 5,
@@ -179,39 +199,123 @@ class EarlyStopping:
         delta: float = 0.0,
         path: str = "checkpoint.pt",
         trace_func=print,
+        monitor: str = "total",
     ) -> None:
+        if monitor not in ("total", "both"):
+            raise ValueError("monitor must be 'total' or 'both'")
+
         self.patience    = patience
         self.verbose     = verbose
         self.delta       = delta
         self.path        = path
         self.trace_func  = trace_func
+        self.monitor     = monitor
 
         self.counter     = 0
         self.best_score  = None
         self.early_stop  = False
         self.val_loss_min = float("inf")
 
-    def __call__(self, val_loss: float, model: nn.Module) -> None:
+        # Per-head patience state, used when monitor='both'
+        self._head_best: dict[str, float | None] = {h: None for h in self.HEADS}
+        self._head_counter: dict[str, int] = {h: 0 for h in self.HEADS}
+
+    def reset(self) -> None:
+        """Clear the patience counters and the stop flag.
+
+        Called at each stage boundary in staged training (see :func:`fit`) so a
+        newly-unfrozen sub-network starts with a full patience budget.
+        ``best_score`` and the saved checkpoint are deliberately left intact:
+        the best model so far is still the best model.
+        """
+        self.counter     = 0
+        self.early_stop  = False
+        self._head_best   = {h: None for h in self.HEADS}
+        self._head_counter = {h: 0 for h in self.HEADS}
+
+    def __call__(
+        self,
+        val_loss: float,
+        model: nn.Module,
+        *,
+        val_habitat: float | None = None,
+        val_movement: float | None = None,
+        active: tuple[str, ...] = HEADS,
+    ) -> None:
+        """Record an epoch's validation losses and update the stop decision.
+
+        Parameters
+        ----------
+        val_loss:
+            Combined validation loss.  Always drives checkpointing.
+        model:
+            Model to checkpoint when *val_loss* improves.
+        val_habitat, val_movement:
+            Per-component validation losses.  Required when ``monitor='both'``.
+        active:
+            Which components' patience gates stopping.  In staged training a
+            frozen sub-network cannot improve, so counting its patience would
+            end the stage for a head that was never given the chance to learn.
+        """
         # Negate loss so higher score = better (allows simple "did we improve?" check)
         score = -val_loss
+        improved = self.best_score is None or score >= self.best_score + self.delta
 
-        if self.best_score is None:
-            # First epoch — always save
+        if improved:
+            # First epoch, or a new best: save the checkpoint
             self.best_score = score
             self._save(val_loss, model)
-        elif score < self.best_score + self.delta:
-            # No meaningful improvement: increment patience counter
-            self.counter += 1
-            self.trace_func(
-                f"EarlyStopping counter: {self.counter} out of {self.patience}"
+
+        if self.monitor == "total":
+            self.counter = 0 if improved else self.counter + 1
+            if not improved:
+                self.trace_func(
+                    f"EarlyStopping counter: {self.counter} out of {self.patience}"
+                )
+            self.early_stop = self.counter >= self.patience
+            return
+
+        # monitor == 'both': each component keeps its own patience budget, so a
+        # plateaued movement head cannot end a run in which habitat is still
+        # improving (and vice versa).
+        components = {"habitat": val_habitat, "movement": val_movement}
+        missing = [h for h, v in components.items() if v is None]
+        if missing:
+            raise ValueError(
+                f"monitor='both' requires {' and '.join(missing)} validation "
+                "loss; pass val_habitat= and val_movement= from the epoch's "
+                "validation pass."
             )
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            # New best: save checkpoint and reset counter
-            self.best_score = score
-            self._save(val_loss, model)
-            self.counter = 0
+
+        active = tuple(active)
+        unknown = set(active) - set(self.HEADS)
+        if unknown:
+            raise ValueError(
+                f"unknown component(s) in active: {sorted(unknown)}; "
+                f"expected a subset of {self.HEADS}"
+            )
+
+        for head in self.HEADS:
+            head_score = -components[head]
+            best = self._head_best[head]
+            if best is None or head_score >= best + self.delta:
+                self._head_best[head] = head_score
+                self._head_counter[head] = 0
+            else:
+                self._head_counter[head] += 1
+
+        if not active:
+            # Nothing is training, so nothing can plateau; leave the flag alone.
+            self.early_stop = False
+            return
+
+        counters = ", ".join(
+            f"{h}: {self._head_counter[h]}/{self.patience}" for h in active
+        )
+        self.trace_func(f"EarlyStopping counters — {counters}")
+        self.early_stop = all(
+            self._head_counter[h] >= self.patience for h in active
+        )
 
     def _save(self, val_loss: float, model: nn.Module) -> None:
         if self.verbose:
@@ -317,13 +421,38 @@ def _grads_are_finite(model: nn.Module) -> bool:
     )
 
 
+def set_trainable(model: nn.Module, *, habitat: bool, movement: bool) -> None:
+    """Toggle ``requires_grad`` on each sub-network of a ``ConvJointModel``.
+
+    Used by staged training (see :func:`fit`) so that a frozen sub-network
+    produces no gradients at all.  This is cheaper than discarding them after
+    the fact, and means a frozen branch cannot silently accumulate gradients
+    that no optimiser ever clears.
+
+    Freezing a branch this way leaves its surface in the likelihood as a fixed
+    offset — unlike ``negativeLogLikeLoss(freeze_movement=True)``, which drops
+    the movement surface from the combined loss entirely.
+
+    Parameters
+    ----------
+    model:
+        ConvJointModel instance.
+    habitat, movement:
+        Whether the habitat and movement branches should receive gradients.
+    """
+    for param in model.conv_habitat.parameters():
+        param.requires_grad_(habitat)
+    for module in (model.conv_movement, model.fcn_movement_all):
+        for param in module.parameters():
+            param.requires_grad_(movement)
+
+
 def train_loop(
     dataloader_train,
     model: nn.Module,
     loss_fn,
     optimisers: tuple,
     *,
-    skip_epoch0_training: bool = False,
     batch_size: int = 32,
     grad_clip: float | None = None,
 ) -> torch.Tensor:
@@ -341,10 +470,8 @@ def train_loop(
         Callable returning ``(total_loss, habitat_loss, movement_loss)``.
     optimisers:
         ``(optimiser_movement, optimiser_habitat)`` — either may be ``None``
-        to freeze that sub-network.
-    skip_epoch0_training:
-        If ``True``, run a forward pass but skip backward/update steps.
-        Useful for inspecting untrained-model outputs.
+        to freeze that sub-network.  Pair this with :func:`set_trainable` so
+        the frozen branch does not compute gradients it will never use.
     batch_size:
         Used only for progress reporting.
     grad_clip:
@@ -382,9 +509,8 @@ def train_loop(
         x3 = x3.to(device)
         y  = tuple(t.to(device) for t in y)
 
-        with torch.set_grad_enabled(not skip_epoch0_training):
-            outputs = model((x1, x2, x3))
-            total_loss, _, _ = loss_fn(outputs, y)
+        outputs = model((x1, x2, x3))
+        total_loss, _, _ = loss_fn(outputs, y)
 
         # A non-finite loss cannot produce a usable update; stepping on it would
         # write NaN into the weights permanently.  Skip the batch instead.
@@ -400,72 +526,80 @@ def train_loop(
         epoch_loss += total_loss.detach()
         n_finite   += 1
 
-        if not skip_epoch0_training:
-            if optimiser_movement is not None:
-                optimiser_movement.zero_grad()
-            if optimiser_habitat is not None:
-                optimiser_habitat.zero_grad()
+        # Zero on the model rather than per-optimiser: that covers every
+        # parameter, including any branch frozen for this stage, so nothing can
+        # be left out of the reset and quietly accumulate gradients.
+        model.zero_grad(set_to_none=True)
 
-            total_loss.backward()
+        total_loss.backward()
 
-            # Gradients can be non-finite even when the loss is not (e.g. a
-            # density that underflows to zero at the observed pixel), so check
-            # after backward as well and drop the update if anything is bad.
-            if not _grads_are_finite(model):
-                n_skipped += 1
-                if n_skipped <= 5:
-                    print(f"  [warning] non-finite gradients at batch {batch}; "
-                          "skipping update")
-                if optimiser_movement is not None:
-                    optimiser_movement.zero_grad()
-                if optimiser_habitat is not None:
-                    optimiser_habitat.zero_grad()
-                continue
+        # Gradients can be non-finite even when the loss is not (e.g. a
+        # density that underflows to zero at the observed pixel), so check
+        # after backward as well and drop the update if anything is bad.
+        if not _grads_are_finite(model):
+            n_skipped += 1
+            if n_skipped <= 5:
+                print(f"  [warning] non-finite gradients at batch {batch}; "
+                      "skipping update")
+            model.zero_grad(set_to_none=True)
+            continue
 
-            if grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
-            # The two sub-networks share a single backward pass but are updated
-            # by separate optimisers. To prevent cross-contamination:
-            # 1. Stash habitat gradients and zero them so the movement optimiser
-            #    only updates movement parameters.
-            habitat_grads = []
-            for param in model.conv_habitat.parameters():
-                g = param.grad.clone() if param.grad is not None else None
-                habitat_grads.append(g)
-                param.grad = None
-
-            if optimiser_movement is not None:
-                optimiser_movement.step()
-
-            # 2. Zero movement-FCN gradients, restore habitat gradients, then
-            #    update only the habitat sub-network.
-            for param in model.fcn_movement_all.parameters():
-                param.grad = None
-            for i, param in enumerate(model.conv_habitat.parameters()):
-                param.grad = habitat_grads[i]
-
-            if optimiser_habitat is not None:
-                optimiser_habitat.step()
+        # The two sub-networks share a single backward pass but own disjoint
+        # parameter sets, and Adam only reads .grad for its own parameters —
+        # so the two steps cannot contaminate each other and need no shuffling
+        # of gradients between them.
+        if optimiser_movement is not None:
+            optimiser_movement.step()
+        if optimiser_habitat is not None:
+            optimiser_habitat.step()
 
         if batch % 10 == 0:
             current = batch * batch_size + len(x1)
-            tag = "[obs only] " if skip_epoch0_training else ""
-            print(f"{tag}loss: {total_loss.item():>15f}  [{current:>5d}/{size:>5d}]")
+            print(f"loss: {total_loss.item():>15f}  [{current:>5d}/{size:>5d}]")
 
         torch.cuda.empty_cache()
 
     # Average over the batches that actually contributed, so a few skipped
     # batches do not silently deflate the reported loss.
     epoch_loss /= max(n_finite, 1)
-    tag = "observation-only " if skip_epoch0_training else ""
-    print(f"\nAvg {tag}training loss: {epoch_loss:>15f}")
+    print(f"\nAvg training loss: {epoch_loss:>15f}")
     if n_skipped:
         print(
             f"  [warning] {n_skipped}/{num_batches} batches skipped this epoch "
             "(non-finite loss or gradients)"
         )
     return epoch_loss
+
+
+def _validate(
+    model: nn.Module, dataloader, loss_fn, device
+) -> tuple[float, float, float]:
+    """Mean ``(total, habitat, movement)`` loss over *dataloader*, no gradients.
+
+    The habitat and movement figures are diagnostics: only ``total`` is
+    optimised.  Because both sub-network surfaces are already log-normalised,
+    ``total = habitat + movement + logZ``, so the two components are directly
+    comparable to the uniform baseline ``log(H * W)``.
+    """
+    model.eval()
+    n_batches = len(dataloader)
+    total_sum = hab_sum = mov_sum = 0.0
+
+    with torch.no_grad():
+        for x1, x2, x3, y, _ in dataloader:
+            x1 = x1.to(device)
+            x2 = x2.to(device)
+            x3 = x3.to(device)
+            y  = tuple(t.to(device) for t in y)
+            total, hab, mov = loss_fn(model((x1, x2, x3)), y)
+            total_sum += total.detach().item()
+            hab_sum   += hab.detach().item()
+            mov_sum   += mov.detach().item()
+
+    return total_sum / n_batches, hab_sum / n_batches, mov_sum / n_batches
 
 
 def test_loop(dataloader_test, model: nn.Module, loss_fn) -> torch.Tensor:
@@ -536,8 +670,17 @@ def make_optimisers(
     optimisers : (optimiser_movement, optimiser_habitat)
     schedulers : (scheduler_movement, scheduler_habitat)
     """
+    # The movement branch is conv_movement → fcn_movement_all; both must be
+    # owned by the optimiser.  Before 0.3.1 conv_movement was in no optimiser at
+    # all: it accumulated gradients across the whole run without ever being
+    # zeroed or stepped, so the trunk stayed at its random initialisation and the
+    # accumulating buffer eventually made _grads_are_finite fail for good.
     opt_movement = optim.Adam(
-        model.fcn_movement_all.parameters(), lr=lr_movement
+        [
+            {"params": model.conv_movement.parameters()},
+            {"params": model.fcn_movement_all.parameters()},
+        ],
+        lr=lr_movement,
     )
     opt_habitat = optim.Adam(
         model.conv_habitat.parameters(), lr=lr_habitat
@@ -549,6 +692,17 @@ def make_optimisers(
         opt_habitat, patience=scheduler_patience, factor=scheduler_factor
     )
     return (opt_movement, opt_habitat), (sched_movement, sched_habitat)
+
+
+# ---------------------------------------------------------------------------
+# Per-epoch reporting helpers
+# ---------------------------------------------------------------------------
+
+def _lr_report(before: float, after: float) -> str:
+    """Format a learning rate, noting a reduction made by the scheduler."""
+    if after < before:
+        return f"{after:.3e} (decreased from {before:.3e})"
+    return f"{after:.3e}"
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +791,51 @@ def _save_snapshot(
 # Full training loop
 # ---------------------------------------------------------------------------
 
+
+def _normalise_stages(
+    stages: list[dict] | None, n_epochs: int
+) -> list[tuple[int, tuple[str, ...]]]:
+    """Validate *stages* and return it as ``[(epochs, active_components), ...]``.
+
+    ``None`` becomes a single joint stage of *n_epochs*, i.e. the unstaged
+    behaviour.
+    """
+    if stages is None:
+        return [(n_epochs, EarlyStopping.HEADS)]
+
+    if not stages:
+        raise ValueError("stages must be a non-empty list, or None")
+
+    normalised: list[tuple[int, tuple[str, ...]]] = []
+    for i, stage in enumerate(stages):
+        unknown_keys = set(stage) - {"epochs", "train"}
+        if unknown_keys:
+            raise ValueError(
+                f"stage {i}: unknown key(s) {sorted(unknown_keys)}; "
+                "expected 'epochs' and 'train'"
+            )
+        try:
+            epochs = int(stage["epochs"])
+            active = tuple(stage["train"])
+        except KeyError as exc:
+            raise ValueError(f"stage {i}: missing key {exc}") from None
+
+        if epochs < 1:
+            raise ValueError(f"stage {i}: epochs must be >= 1, got {epochs}")
+        unknown = set(active) - set(EarlyStopping.HEADS)
+        if unknown:
+            raise ValueError(
+                f"stage {i}: unknown component(s) in 'train': {sorted(unknown)}; "
+                f"expected a subset of {EarlyStopping.HEADS}"
+            )
+        if not active:
+            raise ValueError(f"stage {i}: 'train' must name at least one component")
+
+        normalised.append((epochs, active))
+
+    return normalised
+
+
 def fit(
     model: nn.Module,
     image_trim_pixels: int,
@@ -648,12 +847,21 @@ def fit(
     schedulers: tuple | None = None,
     *,
     n_epochs: int = 10,
+    stages: list[dict] | None = None,
+    reset_optimiser_state: bool = True,
     early_stopping: EarlyStopping | None = None,
     snapshot_dir: str | None = None,
     snapshot_item: int = 0,
+    batch_size: int = 32,
     grad_clip: float | None = None,
 ) -> dict[str, list[float]]:
-    """Train for *n_epochs* with per-epoch validation, scheduling, and snapshots.
+    """Train with per-epoch validation, scheduling, snapshots and optional staging.
+
+    A validation pass runs *before* the first epoch and is recorded at index 0
+    of every history list, giving an untrained baseline to measure against.  For
+    a 75x75 window an untrained habitat surface should score close to
+    ``log(75 * 75) = 8.635``, so the gap between that and the final
+    ``val_habitat_losses`` is a direct read on how much habitat actually learned.
 
     Parameters
     ----------
@@ -668,14 +876,37 @@ def fit(
     optimisers:
         ``(optimiser_movement, optimiser_habitat)`` from :func:`make_optimisers`.
     schedulers:
-        ``(sched_movement, sched_habitat)`` — both ``ReduceLROnPlateau``,
-        stepped each epoch on the validation loss.  Pass ``None`` to skip.
+        ``(sched_movement, sched_habitat)`` — both ``ReduceLROnPlateau``.  Each
+        is stepped on *its own* component of the validation loss, and only while
+        that component is training.  Pass ``None`` to skip.
     n_epochs:
-        Maximum number of epochs.
+        Maximum number of epochs.  Ignored when *stages* is given.
+    stages:
+        Optional coordinate-ascent schedule, e.g.::
+
+            stages=[
+                {"epochs": 10, "train": ("movement",)},
+                {"epochs": 40, "train": ("habitat",)},
+                {"epochs": 20, "train": ("habitat", "movement")},
+            ]
+
+        Each stage names the sub-networks that receive updates; the others are
+        frozen with :func:`set_trainable`, but their surfaces stay in the
+        likelihood as a fixed offset.  This lets each component run to its own
+        convergence without reweighting the objective.  Early stopping ends the
+        current *stage* and advances to the next, so the last stage's early stop
+        ends the run.  ``None`` (default) runs one joint stage of *n_epochs*.
+    reset_optimiser_state:
+        Clear the Adam moment estimates of a sub-network when it becomes active
+        in a new stage, so it does not resume on momentum accumulated many
+        epochs earlier.  Only applies when *stages* is given.
     early_stopping:
-        :class:`EarlyStopping` instance, or ``None`` to disable.
+        :class:`EarlyStopping` instance, or ``None`` to disable.  Prefer
+        ``monitor='both'`` here: the combined loss is dominated by the movement
+        component, so stopping on it alone ends the run while habitat is still
+        improving.
     snapshot_dir:
-        Directory for per-epoch 2×2 PNG snapshots.  ``None`` disables saving.
+        Directory for per-epoch 2x2 PNG snapshots.  ``None`` disables saving.
     snapshot_item:
         Index into ``dl_val.dataset`` for the snapshot sample.
     grad_clip:
@@ -686,13 +917,16 @@ def fit(
     Returns
     -------
     history : dict[str, list[float]]
-        Keys: ``train_losses``, ``val_losses``,
-        ``val_habitat_losses``, ``val_movement_losses``.
+        Keys: ``train_losses``, ``val_losses``, ``val_habitat_losses``,
+        ``val_movement_losses``, ``stage``.  **Index 0 is the pre-training
+        baseline**: ``train_losses[0]`` is ``nan`` and ``stage[0]`` is ``-1``.
     """
     device = get_device()
+    opt_mov, opt_hab = optimisers
     sched_mov, sched_hab = (
         schedulers if schedulers is not None else (None, None)
     )
+    schedule = _normalise_stages(stages, n_epochs)
 
     if snapshot_dir is not None:
         os.makedirs(snapshot_dir, exist_ok=True)
@@ -702,60 +936,114 @@ def fit(
         "val_losses": [],
         "val_habitat_losses": [],
         "val_movement_losses": [],
+        "stage": [],
     }
 
-    for epoch in range(n_epochs):
-        print(f"\nEpoch {epoch + 1}/{n_epochs}")
+    def record(train_loss: float, val: tuple[float, float, float], stage: int) -> None:
+        history["train_losses"].append(train_loss)
+        history["val_losses"].append(val[0])
+        history["val_habitat_losses"].append(val[1])
+        history["val_movement_losses"].append(val[2])
+        history["stage"].append(stage)
 
-        train_loss = train_loop(
-            dl_train, model, loss_fn, optimisers, grad_clip=grad_clip
+    # Untrained baseline, recorded at index 0 of every history list.
+    baseline = _validate(model, dl_val, loss_fn, device)
+    print(
+        f"Baseline (untrained) val loss: {baseline[0]:.6f}"
+        f"  (hab: {baseline[1]:.6f}, mov: {baseline[2]:.6f})"
+    )
+    record(float("nan"), baseline, -1)
+
+    total_epochs = sum(epochs for epochs, _ in schedule)
+    epoch = 0  # global counter, so snapshots stay ordered across stages
+
+    for stage_idx, (stage_epochs, active) in enumerate(schedule):
+        if stages is not None:
+            print(
+                f"\n=== Stage {stage_idx + 1}/{len(schedule)}: training "
+                f"{' + '.join(active)} for up to {stage_epochs} epoch(s) ==="
+            )
+            set_trainable(
+                model,
+                habitat="habitat" in active,
+                movement="movement" in active,
+            )
+            if reset_optimiser_state:
+                # A sub-network frozen for many epochs would otherwise resume on
+                # stale Adam moments pointing in a long-outdated direction.
+                for name, opt in (("habitat", opt_hab), ("movement", opt_mov)):
+                    if name in active and opt is not None:
+                        opt.state.clear()
+            if early_stopping is not None:
+                early_stopping.reset()
+
+        # Freeze by withholding the optimiser as well as requires_grad, so this
+        # works whether or not set_trainable was applied.
+        stage_optimisers = (
+            opt_mov if "movement" in active else None,
+            opt_hab if "habitat" in active else None,
         )
 
-        # Validation — track all three loss components
-        model.eval()
-        val_total = val_hab = val_mov = 0.0
-        n_val = len(dl_val)
+        for _ in range(stage_epochs):
+            print(f"\nEpoch {epoch + 1}/{total_epochs}")
 
-        with torch.no_grad():
-            for x1, x2, x3, y, _ in dl_val:
-                x1 = x1.to(device)
-                x2 = x2.to(device)
-                x3 = x3.to(device)
-                y = tuple(t.to(device) for t in y)
-                total, hab, mov = loss_fn(model((x1, x2, x3)), y)
-                val_total += total.detach().item()
-                val_hab += hab.detach().item()
-                val_mov += mov.detach().item()
-
-        val_total /= n_val
-        val_hab /= n_val
-        val_mov /= n_val
-        print(
-            f"Val loss: {val_total:.6f}"
-            f"  (hab: {val_hab:.6f}, mov: {val_mov:.6f})"
-        )
-
-        history["train_losses"].append(float(train_loss))
-        history["val_losses"].append(val_total)
-        history["val_habitat_losses"].append(val_hab)
-        history["val_movement_losses"].append(val_mov)
-
-        if sched_mov is not None:
-            sched_mov.step(val_total)
-        if sched_hab is not None:
-            sched_hab.step(val_total)
-
-        if snapshot_dir is not None:
-            _save_snapshot(
-                model,  image_trim_pixels, window_size, 
-                dl_val, snapshot_item, epoch,
-                history, snapshot_dir, device,
+            train_loss = train_loop(
+                dl_train, model, loss_fn, stage_optimisers,
+                batch_size=batch_size, grad_clip=grad_clip,
             )
 
-        if early_stopping is not None:
-            early_stopping(val_total, model)
-            if early_stopping.early_stop:
-                print("Early stopping triggered.")
-                break
+            val_total, val_hab, val_mov = _validate(model, dl_val, loss_fn, device)
+            print(
+                f"Val loss: {val_total:.6f}"
+                f"  (hab: {val_hab:.6f}, mov: {val_mov:.6f})"
+            )
+            record(float(train_loss), (val_total, val_hab, val_mov), stage_idx)
+
+            # Read the learning rates either side of the scheduler step so any
+            # reduction can be flagged in the epoch summary.
+            lr_mov_before = opt_mov.param_groups[0]["lr"]
+            lr_hab_before = opt_hab.param_groups[0]["lr"]
+
+            # Each scheduler steps on its own component, and only while that
+            # component is training.  Stepping both on the combined loss let the
+            # movement-dominated total decide when to cut habitat's learning
+            # rate; stepping a frozen head's scheduler would cut its rate for a
+            # lack of improvement it was never given the chance to make.
+            if sched_mov is not None and "movement" in active:
+                sched_mov.step(val_mov)
+            if sched_hab is not None and "habitat" in active:
+                sched_hab.step(val_hab)
+
+            lr_mov = opt_mov.param_groups[0]["lr"]
+            lr_hab = opt_hab.param_groups[0]["lr"]
+            print(
+                f"Learning rates: hab: {_lr_report(lr_hab_before, lr_hab)}"
+                f", mov: {_lr_report(lr_mov_before, lr_mov)}"
+            )
+
+            if snapshot_dir is not None:
+                _save_snapshot(
+                    model,  image_trim_pixels, window_size,
+                    dl_val, snapshot_item, epoch,
+                    history, snapshot_dir, device,
+                )
+
+            epoch += 1
+
+            if early_stopping is not None:
+                early_stopping(
+                    val_total, model,
+                    val_habitat=val_hab, val_movement=val_mov,
+                    active=active,
+                )
+                if early_stopping.early_stop:
+                    if stages is None:
+                        print("Early stopping triggered.")
+                    else:
+                        print(
+                            f"Stage {stage_idx + 1} converged at epoch {epoch}; "
+                            "moving on."
+                        )
+                    break
 
     return history

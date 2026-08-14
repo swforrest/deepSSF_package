@@ -137,8 +137,18 @@ def load_environmental_layers(
         Dictionary of ``{name: path}``.  Special keys:
 
         * ``'s2_dir'`` – passed to :func:`load_s2_data`.
-        * Any other ``.tif`` path – loaded via rasterio and scaled to [0, 1].
+        * Any other ``.tif`` path – loaded via rasterio and min-max scaled to
+          [0, 1].  For a multi-band TIFF the min and max are taken over all
+          bands together, so the relative magnitudes between bands survive
+          scaling — appropriate when the bands share a natural range (e.g.
+          NDVI/NDWI/NDMI), less so for bands measured in unrelated units.
         * Any other path – loaded as a NumPy ``.npy`` file (memory-mapped).
+
+    Notes
+    -----
+    Out-of-extent regions are padded with ``-1.0`` by the ``subset_*`` helpers in
+    :mod:`deepssf.utils`, one full data range below the scaled minimum, so
+    padding stays distinguishable from real values.
 
     Returns
     -------
@@ -164,8 +174,20 @@ def load_environmental_layers(
                 data = np.nan_to_num(data, nan=0)
                 lo, hi = float(np.nanmin(data)), float(np.nanmax(data))
                 print(f"Layer '{name}': min={lo}, max={hi} → scaled to [0, 1]")
-                # Min-max scale to [0, 1] so all static layers share the same range
-                data = (data - lo) / hi
+                # Min-max scale to [0, 1] so all static layers share the same
+                # range.  The denominator is the *range*, not the maximum:
+                # dividing by hi only lands in [0, 1] when lo == 0, and is
+                # otherwise wrong in a way that depends on the layer's sign.
+                # Sentinel-2 indices stored as x10 000 (lo=-10000, hi=10000)
+                # came out in [0, 2]; an all-negative layer came out negative
+                # and axis-flipped; hi == 0 divided by zero.
+                span = hi - lo
+                if span == 0:
+                    # Constant layer: carries no information, so send it to a
+                    # flat 0 rather than dividing by zero.
+                    data = np.zeros_like(data, dtype=float)
+                else:
+                    data = (data - lo) / span
                 # Drop the band dimension for single-band TIFFs → [H, W]
                 if data.shape[0] == 1:
                     data = data[0]
