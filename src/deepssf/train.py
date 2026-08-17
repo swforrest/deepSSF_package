@@ -6,6 +6,10 @@ Key objects
     Custom NLL loss for the joint habitat-movement output.
 ``EarlyStopping``
     Checkpoint-and-stop helper based on validation-loss improvement.
+``load_checkpoint`` / ``load_head_weights``
+    Read weights back, whole model or a single sub-network.
+``params_from_checkpoint``
+    Rebuild the ``ModelParams`` a checkpoint was trained with.
 ``train_loop``
     One-epoch training pass with separate habitat/movement optimisers.
 ``test_loop``
@@ -31,6 +35,13 @@ from deepssf.utils import get_device
 #: * *format 1* (deepssf ≤ 0.2.3) — a bare ``state_dict``, with no metadata.
 #: * *format 2* (deepssf ≥ 0.3.0) — a dict with ``deepssf_checkpoint_format``,
 #:   ``deepssf_version``, ``val_loss`` and ``state_dict`` keys.
+#:
+#: Since 0.3.1 a format-2 file written from a :class:`~deepssf.model.ConvJointModel`
+#: also carries ``model_params``: the ``ModelParams`` dict the model was built
+#: with, so :func:`params_from_checkpoint` can rebuild the architecture instead
+#: of the user re-typing it.  The key is *optional* rather than a format bump —
+#: an older reader ignores it, and a file written before 0.3.1 simply lacks it
+#: (:func:`params_from_checkpoint` falls back to reading the layer shapes).
 #:
 #: The bump exists because 0.3.0 changed the meaning of movement parameters
 #: 2, 5, 8 and 11 (mixture weights moved from ``softmax(exp(raw))`` to
@@ -308,6 +319,12 @@ class EarlyStopping:
 
         load_checkpoint(path, model)                 # loads in place
         state = load_checkpoint(path)["state_dict"]   # or just the weights
+
+    When the model carries a ``params`` attribute — every
+    :class:`~deepssf.model.ConvJointModel` does — its ``ModelParams`` are
+    written to the file as well, so the architecture can be rebuilt for
+    prediction with :func:`params_from_checkpoint` instead of being re-entered
+    by hand.
     """
 
     HEADS = ("habitat", "movement")
@@ -534,17 +551,24 @@ class EarlyStopping:
         # at module scope would be circular.
         from deepssf import __version__
 
-        torch.save(
-            {
-                "deepssf_checkpoint_format": CHECKPOINT_FORMAT,
-                "deepssf_version": __version__,
-                "val_loss": float(val_loss),
-                "checkpoint_criterion": criterion_name,
-                "checkpoint_score": float(criterion),
-                "state_dict": model.state_dict(),
-            },
-            path,
-        )
+        payload = {
+            "deepssf_checkpoint_format": CHECKPOINT_FORMAT,
+            "deepssf_version": __version__,
+            "val_loss": float(val_loss),
+            "checkpoint_criterion": criterion_name,
+            "checkpoint_score": float(criterion),
+            "state_dict": model.state_dict(),
+        }
+
+        # Record the architecture alongside the weights, so the model can be
+        # rebuilt for prediction without the hyper-parameters being re-entered
+        # by hand.  getattr because EarlyStopping accepts any nn.Module, not
+        # only ConvJointModel.
+        params = getattr(model, "params", None)
+        if hasattr(params, "to_dict"):
+            payload["model_params"] = params.to_dict()
+
+        torch.save(payload, path)
         if is_main:
             self.val_loss_min = criterion
 
@@ -584,8 +608,11 @@ def load_checkpoint(
     Returns
     -------
     dict
-        The checkpoint metadata, with a ``state_dict`` key.  Legacy files are
-        returned in the same shape, with ``deepssf_checkpoint_format`` set to 1.
+        The checkpoint metadata, with a ``state_dict`` key — and, for a file
+        written by deepssf ≥ 0.3.1, a ``model_params`` dict describing the
+        architecture (:func:`params_from_checkpoint` turns it back into
+        ``ModelParams``).  Legacy files are returned in the same shape, with
+        ``deepssf_checkpoint_format`` set to 1.
 
     Raises
     ------
@@ -620,6 +647,223 @@ def load_checkpoint(
         model.load_state_dict(obj["state_dict"], strict=strict)
 
     return obj
+
+
+def _architecture_from_state_dict(state: dict) -> dict:
+    """Recover the shape-determining hyper-parameters from saved weights.
+
+    A conv weight is ``[out_channels, in_channels, k, k]`` and a linear weight
+    is ``[out_features, in_features]``, so every hyper-parameter that changes a
+    tensor shape is readable from the file — which is what makes it possible to
+    load a checkpoint written before ``model_params`` was recorded, and to
+    verify one that has it.
+    """
+    def convs(prefix: str) -> list[str]:
+        keys = [k for k in state if k.startswith(prefix) and k.endswith(".weight")]
+        # 'conv_habitat.conv2d.4.weight' → 4.  Sorted numerically so keys[0] is
+        # the layer that sees the input stack, whatever order torch listed them.
+        return sorted(keys, key=lambda k: int(k.rsplit(".", 2)[-2]))
+
+    hab, move, ffn = convs("conv_habitat."), convs("conv_movement."), convs("fcn_movement_all.")
+    missing = [
+        name for name, keys in
+        (("conv_habitat", hab), ("conv_movement", move), ("fcn_movement_all", ffn))
+        if not keys
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Cannot read the architecture from this checkpoint: no weights for "
+            f"{', '.join(missing)}. It holds "
+            f"{sorted({k.split('.')[0] for k in state})} — is it a ConvJointModel?"
+        )
+
+    first_conv = state[hab[0]]
+    return {
+        # The first habitat conv sees the whole input stack: raster bands plus
+        # the scalar covariates, which are broadcast to grids and concatenated.
+        "input_channels":      int(first_conv.shape[1]),
+        "output_channels":     int(first_conv.shape[0]),
+        "kernel_size":         int(first_conv.shape[2]),
+        "n_conv_layers_hab":   len(hab),
+        "n_conv_layers_move":  len(move),
+        "dense_dim_in_all":    int(state[ffn[0]].shape[1]),
+        "dense_dim_hidden":    int(state[ffn[0]].shape[0]),
+        "num_movement_params": int(state[ffn[-1]].shape[0]),
+    }
+
+
+#: Geometry that leaves no trace in the saved tensors — it changes spatial
+#: *sizes*, not the shapes of stored weights — so it cannot be recovered from a
+#: checkpoint written before ``model_params`` was recorded.  These are the
+#: package defaults, and the only values the rest of the architecture is
+#: coherent with: stride 1 with padding 1 keeps the habitat branch
+#: translation-equivariant, which :func:`~deepssf.predict.predict_habitat_landscape`
+#: depends on.
+_UNRECORDED_GEOMETRY = {
+    "stride": 1,
+    "padding": 1,
+    "kernel_size_mp": 2,
+    "stride_mp": 2,
+    "dropout": 0.0,     # inactive under model.eval() anyway
+    "batch_size": 1,    # stored on ModelParams but never read by a layer
+}
+
+
+def params_from_checkpoint(
+    path: str,
+    *,
+    image_dim: int | None = None,
+    pixel_size: float | None = None,
+    device: str | None = None,
+    n_scalar_covariates: int | None = None,
+    map_location="cpu",
+    **overrides,
+):
+    """Rebuild the :class:`~deepssf.model.ModelParams` a checkpoint was trained with.
+
+    Weights only load into a model built with the same architecture, so
+    predicting from a saved model means reproducing its hyper-parameters
+    exactly.  Re-typing them in a prediction script is the obvious way to get
+    them subtly wrong — a habitat branch one layer too shallow fails loudly, but
+    a mis-set ``pixel_size`` quietly rescales the movement kernel.
+
+    Checkpoints written by deepssf ≥ 0.3.1 carry the params dict, so it is
+    simply read back.  Older files do not, and the architecture is recovered
+    from the layer shapes instead (see :func:`_architecture_from_state_dict`);
+    *image_dim* and *pixel_size* leave no trace in the weights and must then be
+    supplied.
+
+    Either way the result is checked against the saved tensors, so a params dict
+    that disagrees with the weights it was stored beside raises here rather than
+    at ``load_state_dict``.
+
+    Parameters
+    ----------
+    path:
+        Checkpoint to read.
+    image_dim:
+        Spatial window size in pixels.  Overrides the stored value; required
+        for a checkpoint that has none.  The habitat branch is fully
+        convolutional so it runs at any size, but the movement branch's
+        flattened size pins this down to a narrow range, which is checked.
+    pixel_size:
+        Metres per pixel.  Overrides the stored value; required for a
+        checkpoint that has none.  Take it from the raster transform of the
+        layers being predicted on rather than typing it in, since it is what
+        the movement kernel is scaled against.
+    device:
+        Device for the rebuilt model.  Defaults to :func:`~deepssf.utils.get_device`
+        for *this* machine — deliberately not the device recorded in the file,
+        which is where the model happened to be *trained*.
+    n_scalar_covariates:
+        Number of scalar covariates (``len(SCALAR_COLS)``).  Only used for a
+        checkpoint with no stored params, and only to fill
+        ``dim_in_nonspatial_to_grid`` / ``dense_dim_in_nonspatial``, which no
+        layer reads.  The count that *does* matter is folded into
+        ``input_channels``, which is read off the weights.
+    map_location:
+        Passed to :func:`torch.load`.
+    **overrides:
+        Any other ``ModelParams`` field, forced to the given value.  Use for a
+        checkpoint whose training used non-default conv/pool geometry.
+
+    Returns
+    -------
+    ModelParams
+        Ready to pass to :class:`~deepssf.model.ConvJointModel`::
+
+            params = params_from_checkpoint(
+                "best_model.pt", image_dim=WINDOW_SIZE, pixel_size=PIXEL_SIZE
+            )
+            model = ConvJointModel(params).to(params.device)
+            load_checkpoint("best_model.pt", model)
+            model.eval()
+
+    Raises
+    ------
+    ValueError
+        If *image_dim* or *pixel_size* is neither stored nor given, or if
+        *image_dim* would not flatten to the size the movement MLP expects.
+    RuntimeError
+        If a stored params dict contradicts the saved weights, or the file does
+        not hold a ``ConvJointModel``.
+    """
+    # Deferred import: deepssf/__init__ imports this module, so importing the
+    # model at module scope would risk a circular import.
+    from deepssf.model import ModelParams, flattened_conv_dim
+
+    ckpt = load_checkpoint(path, map_location=map_location)
+    from_weights = _architecture_from_state_dict(ckpt["state_dict"])
+    stored = ckpt.get("model_params")
+
+    if stored is None:
+        params = {**_UNRECORDED_GEOMETRY, **from_weights}
+        n_scalars = 0 if n_scalar_covariates is None else int(n_scalar_covariates)
+        params["dim_in_nonspatial_to_grid"] = n_scalars
+        params["dense_dim_in_nonspatial"] = n_scalars
+    else:
+        params = dict(stored)
+        # The weights are the authority: a params dict can be edited, and the
+        # two disagreeing means one of them describes a different model.
+        conflicts = {
+            key: (params[key], value)
+            for key, value in from_weights.items()
+            if key in params and params[key] != value
+        }
+        if conflicts:
+            detail = "; ".join(
+                f"{k}: params say {p!r}, weights say {w!r}"
+                for k, (p, w) in sorted(conflicts.items())
+            )
+            raise RuntimeError(
+                f"{path} stores hyper-parameters that contradict its own weights "
+                f"({detail}). The file is inconsistent — retrain, or pass the "
+                "correct values as keyword overrides."
+            )
+        params.update(from_weights)
+
+    for name, value in (("image_dim", image_dim), ("pixel_size", pixel_size)):
+        if value is not None:
+            params[name] = value
+        elif params.get(name) is None:
+            raise ValueError(
+                f"{name} is not recorded in {path} and was not given. It cannot "
+                "be recovered from the weights: pass "
+                f"{name}=... (the value the model was trained with)."
+            )
+
+    params["device"] = device if device is not None else get_device()
+    params.update(overrides)
+
+    unknown = set(params) - set(ModelParams.FIELDS)
+    if unknown:
+        raise ValueError(
+            f"unknown ModelParams field(s): {sorted(unknown)}; expected a subset "
+            f"of {list(ModelParams.FIELDS)}"
+        )
+
+    # The window is only loosely pinned by the weights — max-pooling
+    # floor-divides, so a range of window sizes flattens to the same length —
+    # but a window outside that range cannot be what this model was trained on.
+    flat = flattened_conv_dim(
+        image_dim=params["image_dim"],
+        n_conv_layers_move=params["n_conv_layers_move"],
+        output_channels=params["output_channels"],
+        kernel_size=params["kernel_size"],
+        stride=params["stride"],
+        padding=params["padding"],
+        kernel_size_mp=params["kernel_size_mp"],
+        stride_mp=params["stride_mp"],
+    )
+    if flat != params["dense_dim_in_all"]:
+        raise ValueError(
+            f"image_dim={params['image_dim']} flattens to {flat} after "
+            f"{params['n_conv_layers_move']}x conv+maxpool, but the movement MLP "
+            f"in {path} expects {params['dense_dim_in_all']}. Set image_dim to "
+            "the window size the model was trained with."
+        )
+
+    return ModelParams(params)
 
 
 def _grads_are_finite(model: nn.Module) -> bool:

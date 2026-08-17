@@ -436,6 +436,11 @@ class ConvJointModel(nn.Module):
         self.fcn_movement_all    = FCN_block_all_movement(params)
         self.movement_grid_output = Params_to_Grid_Block_ChV(params)
         self.device = params.device
+        # Kept so a checkpoint can record the architecture it was trained with
+        # (see EarlyStopping._save and params_from_checkpoint).  ModelParams is
+        # a plain object, so nn.Module stores it as an ordinary attribute — it
+        # holds no tensors and does not appear in state_dict().
+        self.params = params
 
     def forward(self, x: tuple) -> torch.Tensor:
         spatial, scalars, bearing = x[0], x[1], x[2]
@@ -519,3 +524,52 @@ class ModelParams:
         self.n_conv_layers_hab         = d.get("n_conv_layers_hab", 4)
         self.n_conv_layers_move        = d.get("n_conv_layers_move", 3)
         self.device                    = d.get("device", get_device())
+
+    #: Every field the constructor reads, in the order it reads them.  Used by
+    #: :meth:`to_dict` so a new hyper-parameter is written to checkpoints as
+    #: soon as it is added here.
+    FIELDS = (
+        "batch_size",
+        "image_dim",
+        "pixel_size",
+        "dim_in_nonspatial_to_grid",
+        "dense_dim_in_nonspatial",
+        "dense_dim_hidden",
+        "dense_dim_in_all",
+        "input_channels",
+        "output_channels",
+        "kernel_size",
+        "stride",
+        "kernel_size_mp",
+        "stride_mp",
+        "padding",
+        "num_movement_params",
+        "dropout",
+        "n_conv_layers_hab",
+        "n_conv_layers_move",
+        "device",
+    )
+
+    def to_dict(self) -> dict:
+        """Plain-Python copy of the hyper-parameters, ready to be serialised.
+
+        Round-trips through ``ModelParams(params.to_dict())``.  Values are
+        coerced to built-in types (a ``torch.device`` or a NumPy scalar becomes
+        a ``str`` or a ``float``) because this dict is written into checkpoints,
+        which are read back with ``torch.load(..., weights_only=True)`` — that
+        loader accepts tensors and built-in containers only.
+        """
+        return {name: _plain(getattr(self, name)) for name in self.FIELDS}
+
+    def __repr__(self) -> str:
+        fields = ", ".join(f"{k}={v!r}" for k, v in self.to_dict().items())
+        return f"ModelParams({{{fields}}})"
+
+
+def _plain(value):
+    """Coerce *value* to a built-in type that ``weights_only=True`` can read."""
+    if isinstance(value, (bool, int, float, str)) or value is None:
+        return value
+    if hasattr(value, "item"):        # NumPy scalar, 0-d tensor
+        return value.item()
+    return str(value)                 # torch.device, Path, ...

@@ -14,6 +14,9 @@ import re
 import numpy as np
 import torch
 
+from pathlib import Path
+from datetime import date
+
 # ---------------------------------------------------------------------------
 # Device
 # ---------------------------------------------------------------------------
@@ -25,6 +28,23 @@ def get_device() -> str:
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+# ---------------------------------------------------------------------------
+# Create output directory with date and index
+# ---------------------------------------------------------------------------
+
+def get_output_dir(base="outputs"):
+    today = date.today().isoformat()  # e.g. "2026-08-17"
+    base_path = Path(base)
+    
+    i = 1
+    while True:
+        candidate = base_path / f"{today}_{i}"
+        if not candidate.exists():
+            candidate.mkdir(parents=True)
+            return candidate
+        i += 1
 
 
 # ---------------------------------------------------------------------------

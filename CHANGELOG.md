@@ -59,6 +59,34 @@ All notable changes to this project are documented here.
   activations that can exhaust a GPU. `habitat_edge_buffer` reports the exact
   border width that zero-padding contaminates (1 px per conv layer, so 4), which
   is masked to NaN rather than the -inf earlier scripts multiplied through.
+- **Checkpoints record the architecture they were trained with** — a checkpoint
+  written from a `ConvJointModel` now carries a `model_params` key holding
+  `ModelParams.to_dict()`, alongside the weights. Weights only load into a model
+  built with the *same* architecture, so predicting from a saved model
+  previously meant re-typing every hyper-parameter into the prediction script,
+  where a habitat branch one layer too shallow fails loudly but a mis-set
+  `pixel_size` quietly rescales the movement kernel. The key is optional rather
+  than a checkpoint-format bump: format-2 readers ignore what they do not know,
+  and files written before it existed still load.
+- **`deepssf.train.params_from_checkpoint`** — rebuild the `ModelParams` a
+  checkpoint was trained with, ready to pass to `ConvJointModel`. Reads
+  `model_params` where present, and otherwise recovers the architecture from the
+  layer shapes themselves — a conv weight is `[out_channels, in_channels, k, k]`
+  and a linear weight `[out_features, in_features]`, which between them pin down
+  every hyper-parameter that changes a tensor shape. Either way the result is
+  cross-checked against the saved tensors, so a params dict that contradicts the
+  weights it sits beside raises instead of failing later at `load_state_dict`.
+  `image_dim` and `pixel_size` leave no trace in the weights and must be given
+  for a checkpoint that has no stored params; `image_dim` is then validated
+  against the flattened size the movement MLP expects, which pins it to within
+  the slack that max-pooling's floor division allows. `device` deliberately
+  defaults to this machine rather than to whatever the model was trained on.
+- **`ModelParams.to_dict()`** — a plain-Python copy of the hyper-parameters that
+  round-trips through `ModelParams(...)`. Values are coerced to built-in types
+  (a `torch.device` or NumPy scalar becomes a `str` or `float`) because
+  checkpoints are read back with `torch.load(weights_only=True)`, which accepts
+  tensors and built-in containers only. `ModelParams.FIELDS` lists the fields, so
+  a new hyper-parameter reaches checkpoints as soon as it is added there.
 - **`EarlyStopping(checkpoint_on=...)`** and **`EarlyStopping(head_paths=...)`**
   — see *Fixed* below.
 - **`load_head_weights`** — copy just one head's weights out of a checkpoint,

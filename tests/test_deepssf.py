@@ -1437,6 +1437,172 @@ def test_load_checkpoint_rejects_future_format(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# deepssf.train — recovering the architecture from a checkpoint
+# ---------------------------------------------------------------------------
+
+def _legacy_format2_checkpoint(path, model):
+    """A format-2 checkpoint as written before model_params was recorded."""
+    from deepssf.train import CHECKPOINT_FORMAT
+    torch.save({"deepssf_checkpoint_format": CHECKPOINT_FORMAT,
+                "val_loss": 1.0,
+                "state_dict": model.state_dict()}, path)
+
+
+def test_checkpoint_records_model_params(tmp_path):
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    path = tmp_path / "ckpt.pt"
+    model = _tiny_model()
+    EarlyStopping(path=str(path))(1.0, model)
+
+    assert load_checkpoint(str(path))["model_params"] == model.params.to_dict()
+
+
+def test_checkpoint_omits_model_params_for_a_plain_module(tmp_path):
+    """EarlyStopping takes any nn.Module, not only ConvJointModel."""
+    from deepssf.train import EarlyStopping, load_checkpoint
+
+    path = tmp_path / "ckpt.pt"
+    EarlyStopping(path=str(path))(1.0, torch.nn.Linear(2, 2))
+
+    assert "model_params" not in load_checkpoint(str(path))
+
+
+def test_params_from_checkpoint_round_trip(tmp_path):
+    """The rebuilt params reproduce the model the checkpoint came from."""
+    from deepssf.model import ConvJointModel
+    from deepssf.train import EarlyStopping, load_checkpoint, params_from_checkpoint
+
+    path = tmp_path / "ckpt.pt"
+    trained = _tiny_model()
+    EarlyStopping(path=str(path))(1.0, trained)
+
+    params = params_from_checkpoint(str(path), device="cpu")
+    assert params.to_dict() == trained.params.to_dict()
+
+    # The point of the exercise: the weights load into it strictly.
+    rebuilt = ConvJointModel(params)
+    load_checkpoint(str(path), rebuilt)
+    for (_, a), (_, b) in zip(
+        trained.state_dict().items(), rebuilt.state_dict().items(), strict=True
+    ):
+        assert torch.equal(a, b)
+
+
+def test_params_from_checkpoint_reads_shapes_when_params_absent(tmp_path):
+    """Pre-0.3.1 checkpoints: the architecture comes from the layer shapes."""
+    from deepssf.model import ConvJointModel
+    from deepssf.train import load_checkpoint, params_from_checkpoint
+
+    path = tmp_path / "legacy.pt"
+    trained = _tiny_model()
+    _legacy_format2_checkpoint(path, trained)
+
+    params = params_from_checkpoint(
+        str(path), image_dim=21, pixel_size=25, n_scalar_covariates=4, device="cpu"
+    )
+    for field in ("input_channels", "output_channels", "kernel_size",
+                  "n_conv_layers_hab", "n_conv_layers_move",
+                  "dense_dim_in_all", "dense_dim_hidden", "num_movement_params"):
+        assert getattr(params, field) == getattr(trained.params, field), field
+
+    load_checkpoint(str(path), ConvJointModel(params))
+
+
+def test_params_from_checkpoint_requires_window_when_not_recorded(tmp_path):
+    from deepssf.train import params_from_checkpoint
+
+    path = tmp_path / "legacy.pt"
+    _legacy_format2_checkpoint(path, _tiny_model())
+
+    with pytest.raises(ValueError, match="image_dim is not recorded"):
+        params_from_checkpoint(str(path), pixel_size=25)
+
+
+def test_params_from_checkpoint_rejects_wrong_window(tmp_path):
+    """A window that flattens to a different size cannot be the trained one."""
+    from deepssf.train import params_from_checkpoint
+
+    path = tmp_path / "legacy.pt"
+    _legacy_format2_checkpoint(path, _tiny_model())   # trained at image_dim=21
+
+    with pytest.raises(ValueError, match="flattens to"):
+        params_from_checkpoint(str(path), image_dim=101, pixel_size=25)
+
+
+def test_params_from_checkpoint_accepts_window_within_pooling_slack(tmp_path):
+    """Max-pooling floor-divides, so nearby windows flatten identically."""
+    from deepssf.train import params_from_checkpoint
+
+    path = tmp_path / "legacy.pt"
+    _legacy_format2_checkpoint(path, _tiny_model())   # 21 → 10 → 5 → 2
+
+    assert params_from_checkpoint(str(path), image_dim=20, pixel_size=25).image_dim == 20
+
+
+def test_params_from_checkpoint_rejects_params_contradicting_weights(tmp_path):
+    """A stored params dict that disagrees with the weights is not trusted."""
+    from deepssf.train import EarlyStopping, params_from_checkpoint
+
+    path = tmp_path / "ckpt.pt"
+    EarlyStopping(path=str(path))(1.0, _tiny_model())
+
+    tampered = torch.load(path, weights_only=True)
+    tampered["model_params"]["n_conv_layers_hab"] += 1
+    torch.save(tampered, path)
+
+    with pytest.raises(RuntimeError, match="contradict its own weights"):
+        params_from_checkpoint(str(path))
+
+
+def test_params_from_checkpoint_overrides_win(tmp_path):
+    from deepssf.train import EarlyStopping, params_from_checkpoint
+
+    path = tmp_path / "ckpt.pt"
+    EarlyStopping(path=str(path))(1.0, _tiny_model())
+
+    params = params_from_checkpoint(str(path), pixel_size=10, dropout=0.5)
+    assert params.pixel_size == 10
+    assert params.dropout == 0.5
+
+    with pytest.raises(ValueError, match="unknown ModelParams field"):
+        params_from_checkpoint(str(path), not_a_field=1)
+
+
+def test_params_from_checkpoint_device_follows_this_machine(tmp_path):
+    """Where a model was trained says nothing about where it is being run."""
+    from deepssf.train import EarlyStopping, params_from_checkpoint
+    from deepssf.utils import get_device
+
+    path = tmp_path / "ckpt.pt"
+    model = _tiny_model()          # the fixture builds it on 'cpu'
+    EarlyStopping(path=str(path))(1.0, model)
+
+    assert params_from_checkpoint(str(path)).device == get_device()
+    assert params_from_checkpoint(str(path), device="cpu").device == "cpu"
+
+
+def test_params_from_checkpoint_rejects_non_convjoint_checkpoint(tmp_path):
+    from deepssf.train import EarlyStopping, params_from_checkpoint
+
+    path = tmp_path / "ckpt.pt"
+    EarlyStopping(path=str(path))(1.0, torch.nn.Linear(2, 2))
+
+    with pytest.raises(RuntimeError, match="ConvJointModel"):
+        params_from_checkpoint(str(path), image_dim=21, pixel_size=25)
+
+
+def test_model_params_to_dict_round_trips(small_params):
+    from deepssf.model import ModelParams
+
+    d = small_params.to_dict()
+    assert set(d) == set(ModelParams.FIELDS)
+    assert ModelParams(d).to_dict() == d
+    # Values are plain Python, so torch.load(weights_only=True) can read them
+    assert all(isinstance(v, (bool, int, float, str)) for v in d.values())
+
+
+# ---------------------------------------------------------------------------
 # deepssf.simulate — multiple trajectories and saving
 # ---------------------------------------------------------------------------
 
