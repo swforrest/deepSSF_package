@@ -76,7 +76,7 @@ def plot_trajectories_folium(
     zoom_start: int = 11,
     centre: tuple[float, float] | None = None,
     colours: Sequence[str] = TRAJECTORY_COLOURS,
-    observed_colour: str = "#ffffff",
+    observed_colour: str = "#ffffff", 
     weight: float = 2.0,
     opacity: float = 0.85,
     observed_as_points: bool = True,
