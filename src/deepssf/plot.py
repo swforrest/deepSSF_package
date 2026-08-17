@@ -264,8 +264,12 @@ def add_heatmap_overlay(
     The overlay is coloured here rather than by folium so that cells below
     *vmin* can be made fully transparent, and it is added to *fmap* directly.
     :func:`plot_trajectories_folium` builds its layer control before returning,
-    but folium collects layers when the map renders, so an overlay added
-    afterwards still gets its own checkbox::
+    and folium emits each child's JavaScript in the order it was added — so a
+    control built first would call ``L.control.layers()`` on a variable the
+    overlay has not declared yet, throwing a TypeError that kills the rest of
+    the map's script (the layers added before it still draw, which is what
+    makes it look like only the heatmap failed).  Any existing layer control is
+    therefore moved to the end below, so this works::
 
         fmap = plot_trajectories_folium(sim, observed=steps)
         add_heatmap_overlay(fmap, counts, heatmap_transform)
@@ -372,4 +376,11 @@ def add_heatmap_overlay(
         show=show,
     )
     overlay.add_to(fmap)
+
+    # Keep any layer control last, so its JS runs after the overlay variable
+    # exists — see the note in the docstring.  _children is an OrderedDict.
+    for key, child in list(fmap._children.items()):
+        if isinstance(child, folium.LayerControl):
+            fmap._children.move_to_end(key)
+
     return overlay
