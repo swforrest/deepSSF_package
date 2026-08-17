@@ -4,9 +4,13 @@ The joint model (``ConvJointModel``) combines two sub-networks:
 
 * **Habitat sub-network** – a stack of 2-D convolutions that produces a
   log-normalised probability surface over the local landscape patch.
-* **Movement sub-network** – convolutions followed by fully connected layers
-  that output parameters for a mixture-of-Gamma × mixture-of-von-Mises
-  movement kernel, converted to the same spatial grid.
+* **Movement sub-network** – convolutions (each followed by max-pooling)
+  followed by fully connected layers that output parameters for a
+  mixture-of-Gamma × mixture-of-von-Mises movement kernel, converted to the
+  same spatial grid.
+
+The depth of each sub-network is set independently by the ``n_conv_layers_hab``
+and ``n_conv_layers_move`` entries of ``ModelParams``.
 
 The final output is the element-wise sum of both log-probability grids, which
 is the joint log-likelihood of the next observed step.
@@ -35,9 +39,18 @@ from deepssf.utils import get_device
 class Conv2d_block_spatial(nn.Module):
     """CNN block that outputs a log-normalised habitat-selection surface.
 
-    Four successive conv layers (3 with ReLU + 1 final) collapse the
-    multi-band spatial input to a single log-probability map of shape
-    [B, H, W].
+    ``params.n_conv_layers_hab`` successive conv layers (every one but the
+    last followed by ReLU) collapse the multi-band spatial input to a single
+    log-probability map of shape [B, H, W].  The final layer is the one that
+    projects to a single channel, and carries no activation because its output
+    *is* the (unnormalised) log-surface.
+
+    There is no pooling here, so the spatial dimensions are preserved and the
+    block stays translation-equivariant however many layers are used — which is
+    what lets :func:`deepssf.predict.predict_habitat_landscape` run the same
+    filters over a whole landscape.  Deeper stacks build more abstract features
+    and widen the receptive field (each layer adds ``kernel_size // 2`` pixels
+    per side), at the cost of training and prediction speed.
     """
 
     def __init__(self, params: ModelParams) -> None:
@@ -47,13 +60,20 @@ class Conv2d_block_spatial(nn.Module):
         k  = params.kernel_size
         s  = params.stride
         p  = params.padding
+        n  = params.n_conv_layers_hab
 
-        self.conv2d = nn.Sequential(
-            nn.Conv2d(ic, oc, k, s, p), nn.ReLU(),
-            nn.Conv2d(oc, oc, k, s, p), nn.ReLU(),
-            nn.Conv2d(oc, oc, k, s, p), nn.ReLU(),
-            nn.Conv2d(oc,  1, k, s, p),
-        )
+        if n < 1:
+            raise ValueError(f"n_conv_layers_hab must be >= 1, got {n}")
+
+        layers: list[nn.Module] = []
+        for i in range(n - 1):
+            # First layer reads the raster + scalar channels; the rest read the
+            # previous layer's feature maps.
+            layers += [nn.Conv2d(ic if i == 0 else oc, oc, k, s, p), nn.ReLU()]
+        # Output layer: n == 1 means it is also the input layer.
+        layers.append(nn.Conv2d(ic if n == 1 else oc, 1, k, s, p))
+
+        self.conv2d = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # conv stack collapses C channels → 1; squeeze removes singleton → [B, H, W]
@@ -67,7 +87,15 @@ class Conv2d_block_spatial(nn.Module):
 # ---------------------------------------------------------------------------
 
 class Conv2d_block_toFC(nn.Module):
-    """CNN block with max-pooling that flattens the spatial input for the FCN."""
+    """CNN block with max-pooling that flattens the spatial input for the FCN.
+
+    ``params.n_conv_layers_move`` conv → ReLU → max-pool blocks, then a flatten.
+    Every block pools, so each one roughly halves the spatial dimensions (with
+    the default ``kernel_size_mp=2, stride_mp=2``): the number of layers sets
+    how much the window is reduced before the fully-connected layers see it.
+    Use :func:`flattened_conv_dim` to get the resulting flattened size, which is
+    what ``params.dense_dim_in_all`` must be set to.
+    """
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__()
@@ -78,16 +106,91 @@ class Conv2d_block_toFC(nn.Module):
         p   = params.padding
         kmp = params.kernel_size_mp
         smp = params.stride_mp
+        n   = params.n_conv_layers_move
 
-        self.conv2d = nn.Sequential(
-            nn.Conv2d(ic, oc, k, s, p), nn.ReLU(), nn.MaxPool2d(kmp, smp),
-            nn.Conv2d(oc, oc, k, s, p), nn.ReLU(), nn.MaxPool2d(kmp, smp),
-            nn.Conv2d(oc, oc, k, s, p), nn.ReLU(), nn.MaxPool2d(kmp, smp),
-            nn.Flatten(),
-        )
+        if n < 1:
+            raise ValueError(f"n_conv_layers_move must be >= 1, got {n}")
+
+        layers: list[nn.Module] = []
+        for i in range(n):
+            # First layer reads the raster + scalar channels; the rest read the
+            # previous layer's feature maps.
+            layers += [
+                nn.Conv2d(ic if i == 0 else oc, oc, k, s, p),
+                nn.ReLU(),
+                nn.MaxPool2d(kmp, smp),
+            ]
+        layers.append(nn.Flatten())
+
+        self.conv2d = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.conv2d(x)
+
+
+def flattened_conv_dim(
+    image_dim: int,
+    n_conv_layers_move: int,
+    output_channels: int,
+    kernel_size: int = 3,
+    stride: int = 1,
+    padding: int = 1,
+    kernel_size_mp: int = 2,
+    stride_mp: int = 2,
+) -> int:
+    """Flattened output size of :class:`Conv2d_block_toFC`.
+
+    This is the value ``ModelParams`` expects for ``dense_dim_in_all``: the
+    number of features the movement CNN hands to the fully-connected block.  It
+    depends on the number of movement conv layers, since each one pools, so it
+    has to be recomputed whenever ``n_conv_layers_move`` (or the window size,
+    or the conv/pool geometry) changes.
+
+    It is computed rather than measured with a dummy forward pass so it can be
+    called *before* ``ModelParams`` is built — the params need the answer.
+
+    Parameters
+    ----------
+    image_dim:
+        Spatial window size in pixels (``params.image_dim``).
+    n_conv_layers_move:
+        Number of conv → ReLU → max-pool blocks in the movement sub-network.
+    output_channels:
+        Feature maps per conv layer (``params.output_channels``).
+    kernel_size, stride, padding:
+        Convolution geometry; the defaults are the package defaults, where
+        padding preserves the spatial dimensions.
+    kernel_size_mp, stride_mp:
+        Max-pool geometry.
+
+    Returns
+    -------
+    int
+        ``output_channels * dim * dim`` after all conv + pool layers.
+
+    Raises
+    ------
+    ValueError
+        If the stack pools the window away to nothing, which means either too
+        many layers or too small a window.
+
+    Examples
+    --------
+    >>> flattened_conv_dim(image_dim=101, n_conv_layers_move=3, output_channels=4)
+    576
+    """
+    dim = image_dim
+    for _ in range(n_conv_layers_move):
+        dim = (dim + 2 * padding - kernel_size) // stride + 1   # conv
+        dim = (dim - kernel_size_mp) // stride_mp + 1           # max-pool
+        if dim < 1:
+            raise ValueError(
+                f"image_dim={image_dim} is too small for "
+                f"n_conv_layers_move={n_conv_layers_move}: the spatial "
+                "dimension pools away to nothing. Use fewer movement conv "
+                "layers or a larger window."
+            )
+    return output_channels * dim * dim
 
 
 # ---------------------------------------------------------------------------
@@ -379,8 +482,19 @@ class ModelParams:
             "padding": 1,
             "num_movement_params": 12,
             "dropout": 0.1,
+            "n_conv_layers_hab": 4,   # optional, defaults to 4
+            "n_conv_layers_move": 3,  # optional, defaults to 3
             "device": "cpu",
         })
+
+    ``n_conv_layers_hab`` and ``n_conv_layers_move`` set the depth of the two
+    sub-networks independently, and both are optional — omitting them gives the
+    architecture used in the deepSSF paper.  ``n_conv_layers_hab`` counts *all*
+    convolutions in the habitat block, including the final one that projects to
+    a single output channel, so the minimum is 1.  ``n_conv_layers_move`` counts
+    conv → ReLU → max-pool blocks; changing it changes the flattened size the
+    fully-connected block receives, so ``dense_dim_in_all`` must be recomputed
+    with :func:`flattened_conv_dim`.
     """
 
     def __init__(self, d: dict) -> None:
@@ -400,4 +514,8 @@ class ModelParams:
         self.padding                   = d["padding"]
         self.num_movement_params       = d["num_movement_params"]
         self.dropout                   = d["dropout"]
+        # Optional with defaults matching the original fixed architecture, so
+        # params dicts written before these were configurable still work.
+        self.n_conv_layers_hab         = d.get("n_conv_layers_hab", 4)
+        self.n_conv_layers_move        = d.get("n_conv_layers_move", 3)
         self.device                    = d.get("device", get_device())

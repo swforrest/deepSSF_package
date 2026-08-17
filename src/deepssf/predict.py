@@ -2,8 +2,9 @@
 
 During training and simulation the habitat sub-network only ever sees a
 ``window_size`` crop centred on the animal.  But it is *fully convolutional* —
-four 3x3 convolutions with stride 1 and padding 1, no pooling and no dense
-layer — so the same weights can be run over the entire landscape in one pass.
+a stack of padded convolutions (``n_conv_layers_hab`` of them, 3x3 with stride
+1 and padding 1 by default), no pooling and no dense layer — so the same
+weights can be run over the entire landscape in one pass.
 Because a convolution is translation-equivariant, the value at a pixel is
 identical to what the model would produce for a window centred there, as long
 as the pixel sits further than the receptive field from the raster edge (see

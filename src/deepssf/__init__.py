@@ -18,7 +18,7 @@ from deepssf.data import (
     prepare_movement_df,
     save_raster,
 )
-from deepssf.model import ConvJointModel, ModelParams
+from deepssf.model import ConvJointModel, ModelParams, flattened_conv_dim
 from deepssf.plot import add_heatmap_overlay, plot_trajectories_folium
 from deepssf.predict import habitat_edge_buffer, predict_habitat_landscape
 from deepssf.simulate import (
@@ -60,6 +60,7 @@ __all__ = [
     # model
     "ConvJointModel",
     "ModelParams",
+    "flattened_conv_dim",
     # train
     "negativeLogLikeLoss",
     "EarlyStopping",

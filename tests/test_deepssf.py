@@ -307,6 +307,140 @@ def test_habitat_output_log_normalised(small_params):
 
 
 # ---------------------------------------------------------------------------
+# Configurable conv depth
+#
+# n_conv_layers_hab / n_conv_layers_move let the user set the depth of the two
+# sub-networks independently.  Both are optional, and omitting them must keep
+# the architecture the deepSSF paper used (4 habitat convs, 3 movement blocks),
+# because saved checkpoints only load into a model with matching layer counts.
+# ---------------------------------------------------------------------------
+
+def test_conv_layer_defaults_match_original_architecture(small_params):
+    from torch import nn
+
+    from deepssf.model import Conv2d_block_spatial, Conv2d_block_toFC
+
+    assert small_params.n_conv_layers_hab == 4
+    assert small_params.n_conv_layers_move == 3
+
+    hab = Conv2d_block_spatial(small_params).conv2d
+    mov = Conv2d_block_toFC(small_params).conv2d
+    assert sum(isinstance(m, nn.Conv2d) for m in hab) == 4
+    assert sum(isinstance(m, nn.ReLU) for m in hab) == 3      # none after the last conv
+    assert sum(isinstance(m, nn.Conv2d) for m in mov) == 3
+    assert sum(isinstance(m, nn.MaxPool2d) for m in mov) == 3  # one per conv
+
+
+@pytest.mark.parametrize("n_hab", [1, 2, 6])
+def test_habitat_depth_is_configurable(small_params, n_hab):
+    """Any depth >= 1 still gives a normalised [B, H, W] surface."""
+    from torch import nn
+
+    from deepssf.model import Conv2d_block_spatial, ModelParams
+    params = ModelParams({**small_params.__dict__, "n_conv_layers_hab": n_hab})
+    block = Conv2d_block_spatial(params)
+
+    convs = [m for m in block.conv2d if isinstance(m, nn.Conv2d)]
+    assert len(convs) == n_hab
+    # Channels must chain: input → output_channels → ... → 1
+    assert convs[0].in_channels == params.input_channels
+    assert convs[-1].out_channels == 1
+
+    out = block(torch.zeros(1, params.input_channels, 11, 11))
+    assert out.shape == (1, 11, 11)                       # no pooling, dims preserved
+    assert abs(torch.exp(out).sum().item() - 1.0) < 1e-5
+
+
+@pytest.mark.parametrize("n_move", [1, 2, 3])
+def test_movement_depth_is_configurable(small_params, n_move):
+    """Flattened size must match flattened_conv_dim for any depth."""
+    from deepssf.model import Conv2d_block_toFC, ModelParams, flattened_conv_dim
+    params = ModelParams({**small_params.__dict__, "n_conv_layers_move": n_move})
+    block = Conv2d_block_toFC(params)
+
+    out = block(torch.zeros(2, params.input_channels, 11, 11))
+    expected = flattened_conv_dim(
+        image_dim=11,
+        n_conv_layers_move=n_move,
+        output_channels=params.output_channels,
+        kernel_size=params.kernel_size,
+        stride=params.stride,
+        padding=params.padding,
+        kernel_size_mp=params.kernel_size_mp,
+        stride_mp=params.stride_mp,
+    )
+    assert out.shape == (2, expected)
+
+
+def test_conv_depths_are_independent(small_params):
+    """Setting one depth must not change the other sub-network."""
+    from torch import nn
+
+    from deepssf.model import ConvJointModel, ModelParams, flattened_conv_dim
+    n_hab, n_move = 2, 1
+    params = ModelParams({
+        **small_params.__dict__,
+        "n_conv_layers_hab": n_hab,
+        "n_conv_layers_move": n_move,
+        "dense_dim_in_all": flattened_conv_dim(
+            image_dim=11,
+            n_conv_layers_move=n_move,
+            output_channels=small_params.output_channels,
+        ),
+    })
+    model = ConvJointModel(params)
+
+    n_conv = lambda block: sum(  # noqa: E731
+        isinstance(m, nn.Conv2d) for m in block.conv2d
+    )
+    assert n_conv(model.conv_habitat) == n_hab
+    assert n_conv(model.conv_movement) == n_move
+
+    out = model((torch.randn(2, 2, 11, 11), torch.randn(2, 4), torch.zeros(2, 1)))
+    assert out.shape == (2, 11, 11, 2)
+    assert torch.isfinite(out).all()
+
+
+@pytest.mark.parametrize("key", ["n_conv_layers_hab", "n_conv_layers_move"])
+def test_conv_depth_below_one_rejected(small_params, key):
+    from deepssf.model import Conv2d_block_spatial, Conv2d_block_toFC, ModelParams
+    params = ModelParams({**small_params.__dict__, key: 0})
+    block = (
+        Conv2d_block_spatial if key == "n_conv_layers_hab" else Conv2d_block_toFC
+    )
+    with pytest.raises(ValueError, match=key):
+        block(params)
+
+
+def test_habitat_edge_buffer_tracks_habitat_depth(small_params):
+    """The receptive-field buffer must follow the configured depth."""
+    from deepssf.model import Conv2d_block_spatial, ModelParams
+    from deepssf.predict import habitat_edge_buffer
+
+    class _Stub:  # habitat_edge_buffer only reads model.conv_habitat
+        def __init__(self, block):
+            self.conv_habitat = block
+
+    for n_hab in (1, 3, 5):
+        params = ModelParams({**small_params.__dict__, "n_conv_layers_hab": n_hab})
+        buffer = habitat_edge_buffer(_Stub(Conv2d_block_spatial(params)))
+        assert buffer == n_hab * (params.kernel_size // 2)
+
+
+def test_flattened_conv_dim_matches_paper_architecture():
+    """The published 101-pixel window / 4 channels / 3 layers case."""
+    from deepssf.model import flattened_conv_dim
+    # 101 → 50 → 25 → 12 after three conv+maxpool blocks; 4 * 12 * 12 = 576
+    assert flattened_conv_dim(101, 3, 4) == 576
+
+
+def test_flattened_conv_dim_rejects_window_pooled_away():
+    from deepssf.model import flattened_conv_dim
+    with pytest.raises(ValueError, match="too small"):
+        flattened_conv_dim(image_dim=11, n_conv_layers_move=6, output_channels=4)
+
+
+# ---------------------------------------------------------------------------
 # deepssf.train
 # ---------------------------------------------------------------------------
 

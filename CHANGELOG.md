@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
+- **Configurable convolutional depth** — `ModelParams` now takes
+  `n_conv_layers_hab` and `n_conv_layers_move`, setting the depth of the two
+  sub-networks independently. The habitat count includes the final convolution
+  that projects to one output channel (so the minimum is 1), and since that
+  block does no pooling, extra layers only deepen the features and widen the
+  receptive field. The movement count is the number of conv → ReLU → max-pool
+  blocks, so it also controls how far the window is reduced before the
+  fully-connected layers. Both keys are optional and default to the paper
+  architecture (4 and 3), so existing params dicts and checkpoints are
+  unaffected — but note that a checkpoint only loads into a model with the same
+  layer counts it was trained with.
+- **`deepssf.model.flattened_conv_dim`** — compute the flattened size of the
+  movement CNN's output, i.e. the value `dense_dim_in_all` must be set to. It
+  changes with `n_conv_layers_move` (every layer pools), so it can no longer be
+  worked out once and hard-coded. It is derived arithmetically rather than by a
+  dummy forward pass, because the answer is needed *before* `ModelParams` is
+  built, and it raises if the stack would pool the window away to nothing
+  instead of failing later inside `MaxPool2d`.
 - **`deepssf.simulate.trajectory_heatmap`** — count simulated locations per cell
   to give a space-use surface for a simulation. `burn_in` discards the first *n*
   steps of every trajectory, which otherwise pile up around the release site(s)
@@ -31,7 +49,7 @@ All notable changes to this project are documented here.
   — stretching the colours and flattening the alpha channel to fully opaque.
 - **`deepssf.predict.predict_habitat_landscape`** — run the trained habitat
   filters over an entire raster in one pass, giving a landscape-scale habitat
-  selection surface. The habitat sub-network is fully convolutional (four 3x3
+  selection surface. The habitat sub-network is fully convolutional (3x3
   convolutions, stride 1, padding 1, no pooling or dense layer), so it is
   translation-equivariant: a pixel's value is exactly what the model would
   produce for a window centred on it. The scalar covariates are broadcast to
