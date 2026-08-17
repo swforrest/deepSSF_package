@@ -3,6 +3,8 @@
 Run with:  pytest
 """
 
+import base64
+import io
 import math
 from pathlib import Path
 
@@ -1939,3 +1941,257 @@ def test_conv_habitat_is_translation_equivariant(small_params):
 
     assert from_left.numel() > 0
     assert torch.equal(from_left, from_right)
+
+
+# ---------------------------------------------------------------------------
+# deepssf.simulate.trajectory_heatmap
+# ---------------------------------------------------------------------------
+
+def _heatmap_inputs():
+    """A 20x20 raster of 10 m cells with the origin at (0, 200) — north-up."""
+    import pandas as pd
+    import rasterio.transform
+
+    transform = rasterio.transform.from_origin(0, 200, 10, 10)
+    df = pd.DataFrame({
+        "trajectory_id": [0, 0, 0, 1, 1, 1],
+        "step": [0, 1, 2, 0, 1, 2],
+        # First two locations share a cell; the rest are spread out
+        "x": [5.0, 8.0, 45.0, 5.0, 105.0, 155.0],
+        "y": [195.0, 192.0, 155.0, 195.0, 105.0, 55.0],
+    })
+    return df, transform, (20, 20)
+
+
+def test_trajectory_heatmap_counts_and_placement():
+    from deepssf.simulate import trajectory_heatmap
+
+    df, transform, shape = _heatmap_inputs()
+    counts, hm_transform = trajectory_heatmap(df, transform, shape)
+
+    assert counts.shape == shape
+    assert counts.sum() == len(df)
+    assert counts[0, 0] == 3        # three locations in the top-left cell
+    assert counts[4, 4] == 1        # (45, 155) → row 4, col 4
+    assert hm_transform == transform  # agg=1 leaves the grid untouched
+
+
+def test_trajectory_heatmap_burn_in_drops_early_steps():
+    from deepssf.simulate import trajectory_heatmap
+
+    df, transform, shape = _heatmap_inputs()
+    counts, _ = trajectory_heatmap(df, transform, shape, burn_in=2)
+
+    assert counts.sum() == 2        # only step 2 of each trajectory survives
+    assert counts[0, 0] == 0        # the release cell is gone
+
+
+def test_trajectory_heatmap_burn_in_without_step_column():
+    """Without a step column, burn-in falls back to row order within each id."""
+    from deepssf.simulate import trajectory_heatmap
+
+    df, transform, shape = _heatmap_inputs()
+    counts, _ = trajectory_heatmap(
+        df.drop(columns="step"), transform, shape, burn_in=2
+    )
+    assert counts.sum() == 2
+
+
+def test_trajectory_heatmap_agg_coarsens_grid():
+    from deepssf.simulate import trajectory_heatmap
+
+    df, transform, shape = _heatmap_inputs()
+    counts, hm_transform = trajectory_heatmap(df, transform, shape, agg=4)
+
+    assert counts.shape == (5, 5)
+    assert counts.sum() == len(df)
+    assert counts[0, 0] == 3
+    assert hm_transform.a == 40 and hm_transform.e == -40
+    # Origin is unchanged, so the coarse grid still aligns with the rasters
+    assert (hm_transform.c, hm_transform.f) == (transform.c, transform.f)
+
+
+def test_trajectory_heatmap_drops_out_of_extent_locations():
+    import pandas as pd
+
+    from deepssf.simulate import trajectory_heatmap
+
+    df, transform, shape = _heatmap_inputs()
+    outside = pd.DataFrame({
+        "trajectory_id": [0, 0], "step": [3, 4],
+        "x": [-50.0, 500.0], "y": [195.0, 195.0],
+    })
+    counts, _ = trajectory_heatmap(
+        pd.concat([df, outside], ignore_index=True), transform, shape
+    )
+    assert counts.sum() == len(df)
+
+
+def test_trajectory_heatmap_accepts_list_of_frames():
+    from deepssf.simulate import trajectory_heatmap
+
+    df, transform, shape = _heatmap_inputs()
+    frames = [sub for _, sub in df.groupby("trajectory_id")]
+    counts, _ = trajectory_heatmap(frames, transform, shape)
+    assert counts.sum() == len(df)
+
+
+def test_trajectory_heatmap_rejects_total_burn_in():
+    import pytest
+
+    from deepssf.simulate import trajectory_heatmap
+
+    df, transform, shape = _heatmap_inputs()
+    with pytest.raises(ValueError, match="burn_in"):
+        trajectory_heatmap(df, transform, shape, burn_in=99)
+
+
+# ---------------------------------------------------------------------------
+# deepssf.data.save_raster
+# ---------------------------------------------------------------------------
+
+def test_save_raster_roundtrip(tmp_path):
+    import rasterio
+    import rasterio.transform
+
+    from deepssf.data import save_raster
+
+    counts = np.arange(12, dtype=np.int64).reshape(3, 4)
+    transform = rasterio.transform.from_origin(0, 30, 10, 10)
+    path = save_raster(
+        counts, tmp_path / "sub" / "counts.tif", transform, "EPSG:3112",
+        nodata=0, band_descriptions="simulated locations per cell",
+    )
+
+    assert path.exists()
+    with rasterio.open(path) as src:
+        assert src.count == 1
+        assert src.crs.to_string() == "EPSG:3112"
+        assert src.transform == transform
+        assert src.nodata == 0
+        assert src.descriptions[0] == "simulated locations per cell"
+        # int64 is narrowed to int32, which GeoTIFF supports
+        assert src.dtypes[0] == "int32"
+        assert np.array_equal(src.read(1), counts)
+
+
+def test_save_raster_multiband(tmp_path):
+    import rasterio
+    import rasterio.transform
+
+    from deepssf.data import save_raster
+
+    arr = np.random.default_rng(0).random((2, 3, 4)).astype("float32")
+    path = save_raster(
+        arr, tmp_path / "multi.tif",
+        rasterio.transform.from_origin(0, 30, 10, 10), "EPSG:4326",
+        band_descriptions=["first", "second"],
+    )
+    with rasterio.open(path) as src:
+        assert src.count == 2
+        assert src.descriptions == ("first", "second")
+        assert np.allclose(src.read(), arr)
+
+
+def test_save_raster_rejects_4d(tmp_path):
+    import pytest
+    import rasterio.transform
+
+    from deepssf.data import save_raster
+
+    with pytest.raises(ValueError, match="2-D"):
+        save_raster(
+            np.zeros((1, 1, 2, 2)), tmp_path / "bad.tif",
+            rasterio.transform.from_origin(0, 30, 10, 10), "EPSG:4326",
+        )
+
+
+# ---------------------------------------------------------------------------
+# deepssf.plot.add_heatmap_overlay
+# ---------------------------------------------------------------------------
+
+def _overlay_rgba(overlay) -> np.ndarray:
+    """Decode the PNG folium embedded in an ImageOverlay back to an RGBA array."""
+    Image = pytest.importorskip("PIL.Image")
+    png = base64.b64decode(overlay.url.split(",", 1)[1])
+    return np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+
+
+def test_add_heatmap_overlay_renders_into_layer_control():
+    """The overlay is added after the layer control, but still gets a checkbox."""
+    import rasterio.transform
+
+    folium = pytest.importorskip("folium")
+
+    from deepssf.plot import add_heatmap_overlay
+
+    counts = np.zeros((10, 10), dtype=np.int32)
+    counts[2:4, 2:4] = 5
+    # A small extent in southern Australia, in the CRS the examples use
+    transform = rasterio.transform.from_origin(1_100_000, -1_400_000, 100, 100)
+
+    fmap = folium.Map(location=[-25.0, 133.0], zoom_start=10)
+    folium.FeatureGroup(name="observed").add_to(fmap)
+    folium.LayerControl().add_to(fmap)  # added *before* the overlay
+
+    overlay = add_heatmap_overlay(fmap, counts, transform, name="sim heatmap")
+    assert isinstance(overlay, folium.raster_layers.ImageOverlay)
+
+    html = fmap.get_root().render()
+    assert '"sim heatmap"' in html.split("_layers = {")[1].split("};")[0]
+
+
+def test_add_heatmap_overlay_colours_only_occupied_cells():
+    """Empty cells are fully transparent and the rest carry the given opacity."""
+    import rasterio.transform
+
+    pytest.importorskip("folium")
+    import folium
+
+    from deepssf.plot import add_heatmap_overlay
+
+    counts = np.zeros((10, 10), dtype=np.int32)
+    counts[5, 5] = 3
+    transform = rasterio.transform.from_origin(1_100_000, -1_400_000, 100, 100)
+
+    fmap = folium.Map(location=[-25.0, 133.0], zoom_start=10)
+    overlay = add_heatmap_overlay(fmap, counts, transform, opacity=0.6)
+    alpha = _overlay_rgba(overlay)[..., 3]
+
+    # folium rescales a float image per channel, which would flatten alpha to
+    # 255; a uint8 image is embedded as given.
+    assert set(np.unique(alpha)) == {0, round(0.6 * 255)}
+    assert (alpha == 0).sum() > alpha.size / 2  # nearly every cell is empty
+
+
+def test_add_heatmap_overlay_aligns_with_the_source_grid():
+    """The coloured pixel lands where the counted cell actually is."""
+    import rasterio.transform
+
+    pytest.importorskip("folium")
+    import folium
+    from rasterio.warp import transform as warp_transform
+    from rasterio.warp import transform_bounds
+
+    from deepssf.plot import add_heatmap_overlay
+
+    counts = np.zeros((20, 20), dtype=np.int32)
+    row, col = 3, 7
+    counts[row, col] = 5
+    transform = rasterio.transform.from_origin(1_100_000, -1_400_000, 100, 100)
+
+    fmap = folium.Map(location=[-25.0, 133.0], zoom_start=10)
+    overlay = add_heatmap_overlay(fmap, counts, transform)
+    alpha = _overlay_rgba(overlay)[..., 3]
+
+    # Where the image sits, in the Web Mercator the overlay is stretched in
+    (south, west), (north, east) = overlay.bounds
+    w, s, e, n = transform_bounds("EPSG:4326", "EPSG:3857", west, south, east, north)
+    # Where the counted cell's centre sits, in the same coordinates
+    x, y = transform * (col + 0.5, row + 0.5)
+    (cx,), (cy,) = warp_transform("EPSG:3112", "EPSG:3857", [x], [y])
+
+    img_row = int((n - cy) / (n - s) * alpha.shape[0])
+    img_col = int((cx - w) / (e - w) * alpha.shape[1])
+    assert alpha[img_row, img_col] > 0
+    assert (alpha > 0).sum() <= 4  # one source cell, give or take resampling

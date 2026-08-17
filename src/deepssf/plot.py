@@ -238,3 +238,138 @@ def plot_trajectories_folium(
         print(f"Map saved: {save_path}")
 
     return fmap
+
+
+def add_heatmap_overlay(
+    fmap,
+    counts: np.ndarray,
+    transform,
+    src_crs: str = "EPSG:3112",
+    name: str = "heatmap",
+    cmap: str = "magma",
+    log_scale: bool = True,
+    vmin: float = 1.0,
+    vmax: float | None = None,
+    opacity: float = 0.75,
+    show: bool = True,
+):
+    """Add a heatmap raster to a folium map as a toggleable image overlay.
+
+    Pairs with :func:`deepssf.simulate.trajectory_heatmap`: the counts it
+    returns are in the rasters' projected CRS, so they are warped to Web
+    Mercator (EPSG:3857) here — the projection Leaflet stretches an image
+    overlay in — which is what keeps the heatmap aligned with the basemap and
+    the trajectories drawn underneath it.
+
+    The overlay is coloured here rather than by folium so that cells below
+    *vmin* can be made fully transparent, and it is added to *fmap* directly.
+    :func:`plot_trajectories_folium` builds its layer control before returning,
+    but folium collects layers when the map renders, so an overlay added
+    afterwards still gets its own checkbox::
+
+        fmap = plot_trajectories_folium(sim, observed=steps)
+        add_heatmap_overlay(fmap, counts, heatmap_transform)
+        fmap.save("map.html")
+
+    Parameters
+    ----------
+    fmap:
+        The ``folium.Map`` to add the overlay to.
+    counts:
+        2-D array on a regular grid, e.g. simulated locations per cell.
+    transform:
+        Rasterio ``Affine`` transform of *counts*.
+    src_crs:
+        CRS of *counts* — the projected CRS of the rasters and GPS data.
+    name:
+        Label in the layer control.
+    cmap:
+        Any matplotlib colormap name.
+    log_scale:
+        Colour on a log scale (the default).  A few cells around the release
+        sites usually hold an order of magnitude more locations than the rest,
+        which flattens a linear scale to a single bright spot.
+    vmin, vmax:
+        Colour limits.  Cells below *vmin* are drawn fully transparent, so the
+        default of 1 hides cells that were never visited.  *vmax* defaults to
+        the maximum of *counts*.
+    opacity:
+        Opacity of the coloured cells, 0-1.
+    show:
+        Whether the layer starts switched on.
+
+    Returns
+    -------
+    folium.raster_layers.ImageOverlay
+        Already added to *fmap*; returned so it can be adjusted further.
+    """
+    try:
+        import folium
+    except ImportError as exc:  # pragma: no cover - trivial guard
+        raise ImportError(
+            "add_heatmap_overlay requires folium: pip install folium"
+        ) from exc
+
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm, Normalize
+    from rasterio.transform import array_bounds
+    from rasterio.warp import (
+        Resampling,
+        calculate_default_transform,
+        reproject,
+        transform_bounds,
+    )
+
+    counts = np.asarray(counts)
+    if counts.ndim != 2:
+        raise ValueError(f"counts must be 2-D, got {counts.ndim}-D")
+
+    # --- Warp onto a Web Mercator grid ---
+    # Leaflet stretches an image overlay linearly between the corners of its
+    # lat/lon bounds *in Mercator screen space*, so the rows must be evenly
+    # spaced in Mercator y, not in latitude.  folium's mercator_project option
+    # would do that here, but it interpolates the RGBA image row by row and
+    # returns float64, which then trips write_png's per-channel rescaling
+    # (colours stretched, alpha flattened to fully opaque).
+    height, width = counts.shape
+    dst_transform, dst_width, dst_height = calculate_default_transform(
+        src_crs, "EPSG:3857", width, height,
+        *array_bounds(height, width, transform),
+    )
+    warped = np.zeros((dst_height, dst_width), dtype="float32")
+    reproject(
+        source=counts.astype("float32"),
+        destination=warped,
+        src_transform=transform,
+        src_crs=src_crs,
+        dst_transform=dst_transform,
+        dst_crs="EPSG:3857",
+        # Nearest neighbour keeps counts as counts; averaging would invent
+        # fractional locations-per-cell.
+        resampling=Resampling.nearest,
+    )
+    west, south, east, north = transform_bounds(
+        "EPSG:3857", "EPSG:4326",
+        *array_bounds(dst_height, dst_width, dst_transform),
+    )
+
+    # --- Colour it, with everything below vmin transparent ---
+    if vmax is None:
+        vmax = float(counts.max())
+    vmax = max(float(vmax), float(vmin) + 1e-9)
+    norm = LogNorm(vmin=vmin, vmax=vmax) if log_scale else Normalize(vmin, vmax)
+    # bytes=True gives a uint8 RGBA image, which folium embeds as-is; a float
+    # image is rescaled per channel by its own maximum, distorting the colours.
+    rgba = plt.get_cmap(cmap)(norm(np.ma.masked_less(warped, vmin)), bytes=True)
+    rgba[..., 3] = np.where(warped >= vmin, round(opacity * 255), 0).astype("uint8")
+
+    overlay = folium.raster_layers.ImageOverlay(
+        image=rgba,
+        bounds=[[south, west], [north, east]],
+        name=name,
+        opacity=1.0,  # transparency is already baked into the alpha channel
+        mercator_project=False,  # the array is already in Web Mercator
+        show=show,
+    )
+    overlay.add_to(fmap)
+    return overlay

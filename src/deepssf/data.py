@@ -20,7 +20,9 @@ from __future__ import annotations
 import glob
 import os
 import re
+from collections.abc import Sequence
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -713,3 +715,97 @@ def make_dataloaders(
     dl_test  = DataLoader(test_ds,  shuffle=False, **dl_kwargs)
 
     return dl_train, dl_val, dl_test
+
+# ---------------------------------------------------------------------------
+# Raster output
+# ---------------------------------------------------------------------------
+
+def save_raster(
+    array: np.ndarray,
+    path: str | Path,
+    transform,
+    crs,
+    nodata: float | int | None = None,
+    band_descriptions: str | Sequence[str] | None = None,
+    dtype: str | None = None,
+    compress: str = "deflate",
+) -> Path:
+    """Write an array to a GeoTIFF, georeferenced like the landscape rasters.
+
+    Anything derived from the landscape — a habitat-selection surface from
+    :func:`deepssf.predict.predict_habitat_landscape`, a simulation heatmap
+    from :func:`deepssf.simulate.trajectory_heatmap` — is just an array until
+    it carries a transform and a CRS.  Written out with both, it opens directly
+    in QGIS/ArcGIS on top of the layers it was derived from.
+
+    Parameters
+    ----------
+    array:
+        2-D ``(height, width)`` or 3-D ``(bands, height, width)`` array.
+    path:
+        Destination ``.tif``.  Parent directories are created; an existing file
+        is overwritten.
+    transform:
+        Rasterio ``Affine`` transform of *array* — the landscape transform for
+        a full-resolution surface, or the coarsened one returned alongside a
+        heatmap.
+    crs:
+        Anything rasterio accepts: a ``rasterio.crs.CRS``, an EPSG string such
+        as ``"EPSG:3112"``, or a WKT string.  ``load_environmental_layers``
+        does not return the CRS, so read it off the source raster:
+        ``with rasterio.open(path) as src: crs = src.crs``.
+    nodata:
+        Value marking cells with no data — ``np.nan`` for a masked edge buffer,
+        ``0`` for the unvisited cells of a heatmap.  GIS software draws these
+        as transparent instead of as real values.
+    band_descriptions:
+        Band name(s) stored in the file's metadata, so the layer is labelled
+        when it is opened again.
+    dtype:
+        Output dtype; defaults to the array's own (``int64`` is narrowed to
+        ``int32``, which GeoTIFF supports and ``int64`` does not).
+    compress:
+        GeoTIFF compression; ``"deflate"`` is lossless.
+
+    Returns
+    -------
+    Path
+        The file written.
+    """
+    array = np.asarray(array)
+    if array.ndim == 2:
+        array = array[np.newaxis]
+    elif array.ndim != 3:
+        raise ValueError(
+            f"array must be 2-D (height, width) or 3-D (bands, height, width), "
+            f"got {array.ndim}-D"
+        )
+
+    if dtype is None:
+        # GeoTIFF has no 64-bit integer type; nothing counted per cell needs one.
+        dtype = "int32" if array.dtype == np.int64 else str(array.dtype)
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(band_descriptions, str):
+        band_descriptions = [band_descriptions]
+
+    with rasterio.open(
+        path, "w",
+        driver="GTiff",
+        height=array.shape[1],
+        width=array.shape[2],
+        count=array.shape[0],
+        dtype=dtype,
+        crs=crs,
+        transform=transform,
+        nodata=nodata,
+        compress=compress,
+    ) as dst:
+        dst.write(array.astype(dtype))
+        for band, description in enumerate(band_descriptions or [], start=1):
+            dst.set_band_description(band, description)
+
+    print(f"Wrote {path} ({path.stat().st_size / 1e6:.2f} MB)")
+    return path

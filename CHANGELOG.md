@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
+- **`deepssf.simulate.trajectory_heatmap`** — count simulated locations per cell
+  to give a space-use surface for a simulation. `burn_in` discards the first *n*
+  steps of every trajectory, which otherwise pile up around the release site(s)
+  and describe the starting conditions more than the fitted model; `agg`
+  aggregates *agg* x *agg* raster pixels into one heatmap cell, since at a
+  typical 20 m resolution the counts are spread so thinly that nearly every
+  occupied cell holds a single location. The returned transform keeps the
+  landscape rasters' origin, so the heatmap stays aligned with the layers it was
+  simulated on. Locations that walked off the landscape are dropped and reported.
+- **`deepssf.data.save_raster`** — write a 2-D or 3-D array to a GeoTIFF with a
+  transform, CRS, nodata value and band descriptions, so anything derived from
+  the landscape (a habitat selection surface, a simulation heatmap) opens in
+  QGIS/ArcGIS on top of the layers it came from. `int64` is narrowed to `int32`,
+  which GeoTIFF supports and `int64` does not.
+- **`deepssf.plot.add_heatmap_overlay`** — add a heatmap raster to an existing
+  folium map as its own toggleable layer, log-scaled by default and fully
+  transparent below `vmin` so unvisited cells do not grey out the basemap.
+  Composes with `plot_trajectories_folium`: that function builds its layer
+  control before returning, but folium collects layers at render time, so an
+  overlay added afterwards still gets a checkbox. The counts are warped to
+  EPSG:3857 with rasterio and handed to folium as a **uint8** image rather than
+  using `mercator_project`: folium's own re-projection interpolates the RGBA
+  image and returns float64, which `write_png` then rescales channel by channel
+  — stretching the colours and flattening the alpha channel to fully opaque.
 - **`deepssf.predict.predict_habitat_landscape`** — run the trained habitat
   filters over an entire raster in one pass, giving a landscape-scale habitat
   selection surface. The habitat sub-network is fully convolutional (four 3x3

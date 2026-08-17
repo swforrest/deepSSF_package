@@ -16,9 +16,10 @@ from deepssf.data import (
     load_s2_data,
     make_dataloaders,
     prepare_movement_df,
+    save_raster,
 )
 from deepssf.model import ConvJointModel, ModelParams
-from deepssf.plot import plot_trajectories_folium
+from deepssf.plot import add_heatmap_overlay, plot_trajectories_folium
 from deepssf.predict import habitat_edge_buffer, predict_habitat_landscape
 from deepssf.simulate import (
     make_simulation_inputs,
@@ -27,6 +28,7 @@ from deepssf.simulate import (
     simulate_trajectories,
     simulate_trajectories_batched,
     simulate_trajectory,
+    trajectory_heatmap,
 )
 from deepssf.train import (
     CHECKPOINT_FORMAT,
@@ -76,6 +78,7 @@ __all__ = [
     "load_s2_data",
     "make_dataloaders",
     "prepare_movement_df",
+    "save_raster",
     # simulate
     "make_simulation_inputs",
     "simulate_next_step",
@@ -83,8 +86,10 @@ __all__ = [
     "simulate_trajectories",
     "simulate_trajectories_batched",
     "save_trajectories",
+    "trajectory_heatmap",
     # plot
     "plot_trajectories_folium",
+    "add_heatmap_overlay",
     # predict
     "predict_habitat_landscape",
     "habitat_edge_buffer",

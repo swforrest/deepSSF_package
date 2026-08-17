@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -10,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from affine import Affine  # installed with rasterio; the transform type
 
 from deepssf.utils import subset_raster_with_padding_torch
 
@@ -801,3 +803,115 @@ def save_trajectories(
     for path in written:
         print(f"Saved: {path}")
     return written
+
+
+# ---------------------------------------------------------------------------
+# Summarising
+# ---------------------------------------------------------------------------
+
+def trajectory_heatmap(
+    trajectories: pd.DataFrame | Sequence[pd.DataFrame],
+    transform,
+    shape: tuple[int, int],
+    burn_in: int = 0,
+    agg: int = 1,
+    x_col: str = "x",
+    y_col: str = "y",
+    step_col: str = "step",
+    id_col: str = "trajectory_id",
+) -> tuple[np.ndarray, object]:
+    """Count simulated locations per cell — a space-use surface for a simulation.
+
+    The heatmap grid shares the landscape rasters' origin and CRS, so it lines
+    up with the environmental layers in a GIS and can be written straight out
+    with :func:`deepssf.data.save_raster` or drawn on a web map with
+    :func:`deepssf.plot.add_heatmap_overlay`.
+
+    Parameters
+    ----------
+    trajectories:
+        Simulated locations: a DataFrame (long format, as returned by
+        :func:`simulate_trajectories`) or a sequence of DataFrames.
+    transform:
+        Rasterio ``Affine`` transform of the landscape rasters — the same one
+        passed to the simulation.
+    shape:
+        ``(height, width)`` of the landscape rasters, in pixels.
+    burn_in:
+        Discard the first *n* steps of every trajectory.  Early steps pile up
+        around the release site(s) and reflect the starting conditions more
+        than the fitted model, so they bias the surface towards wherever the
+        animals were released.  Taken from *step_col* when that column is
+        present, otherwise from each trajectory's row order.
+    agg:
+        Aggregate ``agg`` x ``agg`` raster pixels into one heatmap cell.  At the
+        rasters' native resolution the counts are often spread so thinly that
+        nearly every occupied cell holds a single location; coarsening trades
+        spatial detail for a readable surface.
+    x_col, y_col, step_col, id_col:
+        Column names in *trajectories*.  ``step_col``/``id_col`` are only used
+        for *burn_in* and may be absent when it is 0.
+
+    Returns
+    -------
+    counts:
+        ``int32`` array of shape ``(ceil(height / agg), ceil(width / agg))``,
+        holding the number of simulated locations in each cell.
+    heatmap_transform:
+        Affine transform of *counts* — the rasters' origin with cells ``agg``
+        times larger.
+
+    Notes
+    -----
+    Locations outside the raster extent are dropped (a simulated animal can
+    walk off the landscape) and reported in the returned counts only by their
+    absence; the number dropped is printed.
+    """
+    if not isinstance(trajectories, pd.DataFrame):
+        trajectories = pd.concat(list(trajectories), ignore_index=True)
+
+    if agg < 1:
+        raise ValueError(f"agg must be >= 1, got {agg}")
+    if burn_in:
+        if step_col in trajectories.columns:
+            trajectories = trajectories[trajectories[step_col] >= burn_in]
+        elif id_col in trajectories.columns:
+            # No step column: fall back to row order within each trajectory.
+            trajectories = trajectories[
+                trajectories.groupby(id_col).cumcount() >= burn_in
+            ]
+        else:
+            trajectories = trajectories.iloc[burn_in:]
+        if trajectories.empty:
+            raise ValueError(
+                f"burn_in={burn_in} discarded every location — the "
+                "trajectories are shorter than the burn-in."
+            )
+
+    height = math.ceil(shape[0] / agg)
+    width = math.ceil(shape[1] / agg)
+    # Same origin as the landscape rasters, cells agg times larger.
+    heatmap_transform = transform * Affine.scale(agg)
+
+    # ~transform maps projected coordinates to fractional (col, row); floor to
+    # get the containing cell.  Done here rather than with rasterio.transform
+    # .rowcol so the out-of-extent mask below is built from the same values.
+    cols, rows = ~heatmap_transform * (
+        trajectories[x_col].to_numpy(dtype=float),
+        trajectories[y_col].to_numpy(dtype=float),
+    )
+    rows = np.floor(rows).astype(np.int64)
+    cols = np.floor(cols).astype(np.int64)
+
+    inside = (rows >= 0) & (rows < height) & (cols >= 0) & (cols < width)
+    if not inside.all():
+        print(
+            f"{(~inside).sum():,} of {inside.size:,} locations fell outside the "
+            "raster extent and were dropped"
+        )
+
+    counts = np.zeros((height, width), dtype=np.int32)
+    # np.add.at accumulates repeated (row, col) pairs; counts[rows, cols] += 1
+    # would add 1 per cell no matter how many locations landed in it.
+    np.add.at(counts, (rows[inside], cols[inside]), 1)
+    return counts, heatmap_transform
