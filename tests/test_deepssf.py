@@ -14,9 +14,9 @@ import torch
 
 # Path to the bundled test dataset
 _DATA_DIR = Path(__file__).parent.parent / "src" / "deepssf" / "datasets" / "data"
-_CSV_PATH  = _DATA_DIR / "buffalo_djelk_id2005.csv"
+_CSV_PATH = _DATA_DIR / "buffalo_djelk_id2005.csv"
 _LAYER_PATHS = {
-    "ndvi":  str(_DATA_DIR / "ndvi_2005.tif"),
+    "ndvi": str(_DATA_DIR / "ndvi_2005.tif"),
     "slope": str(_DATA_DIR / "slope_2005.tif"),
 }
 
@@ -25,14 +25,17 @@ _LAYER_PATHS = {
 # deepssf.utils
 # ---------------------------------------------------------------------------
 
+
 def test_get_device_returns_valid_string():
     from deepssf.utils import get_device
+
     device = get_device()
     assert device in ("cuda", "mps", "cpu")
 
 
 def test_recover_hour_roundtrip():
     from deepssf.utils import recover_hour
+
     for hour in (0.0, 6.0, 12.5, 23.9):
         sin_h = np.sin(2 * np.pi * hour / 24)
         cos_h = np.cos(2 * np.pi * hour / 24)
@@ -41,6 +44,7 @@ def test_recover_hour_roundtrip():
 
 def test_recover_yday_roundtrip():
     from deepssf.utils import recover_yday
+
     for yday in (1.0, 90.0, 180.0, 300.0):
         sin_d = np.sin(2 * np.pi * yday / 365.25)
         cos_d = np.cos(2 * np.pi * yday / 365.25)
@@ -103,6 +107,7 @@ def test_subset_raster_with_padding_npy():
 
 def test_subset_layer_vectorized_2d():
     from deepssf.utils import subset_layer_vectorized
+
     arr = np.ones((100, 100), dtype=np.float32)
     patch, col_start, row_start = subset_layer_vectorized(arr, 50, 50, 11)
     assert patch.shape == (11, 11)
@@ -112,6 +117,7 @@ def test_subset_layer_vectorized_2d():
 
 def test_subset_layer_vectorized_3d():
     from deepssf.utils import subset_layer_vectorized
+
     arr = np.ones((4, 100, 100), dtype=np.float32)
     patch, _, _ = subset_layer_vectorized(arr, 50, 50, 11)
     assert patch.shape == (4, 11, 11)
@@ -119,6 +125,7 @@ def test_subset_layer_vectorized_3d():
 
 def test_subset_layer_vectorized_edge_padding():
     from deepssf.utils import subset_layer_vectorized
+
     arr = np.zeros((50, 50), dtype=np.float32)
     patch, _, _ = subset_layer_vectorized(arr, 0, 0, 11)
     assert (patch == -1.0).any()
@@ -126,6 +133,7 @@ def test_subset_layer_vectorized_edge_padding():
 
 def test_clear_memory_does_not_raise():
     from deepssf.utils import clear_memory
+
     clear_memory()  # should silently no-op on CPU
 
 
@@ -133,18 +141,22 @@ def test_clear_memory_does_not_raise():
 # deepssf.data (pure-Python helpers only — no rasterio I/O)
 # ---------------------------------------------------------------------------
 
+
 def test_extract_year_month_regex_found():
     from deepssf.data import extract_year_month_regex
+
     assert extract_year_month_regex("S2_2021_07_mosaic.tif") == "2021_07"
 
 
 def test_extract_year_month_regex_not_found():
     from deepssf.data import extract_year_month_regex
+
     assert extract_year_month_regex("no_date_here.tif") is None
 
 
 def test_day_to_month_index():
     from deepssf.data import day_to_month_index
+
     # Day 1 of the year should map to January (month 1)
     assert day_to_month_index(1) == 1
     # Day ~180 should map to June/July
@@ -158,7 +170,12 @@ def _write_tif(path, data):
 
     bands, height, width = data.shape
     with rasterio.open(
-        path, "w", driver="GTiff", height=height, width=width, count=bands,
+        path,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=bands,
         dtype="float32",
         transform=rasterio.transform.from_bounds(0, 0, width, height, width, height),
     ) as dst:
@@ -168,10 +185,10 @@ def _write_tif(path, data):
 @pytest.mark.parametrize(
     "values",
     [
-        [-10000.0, 0.0, 10000.0],   # S2 indices x10 000: used to give [0, 2]
-        [-100.0, -55.0, -10.0],     # all negative: used to flip sign and axis
-        [0.0, 50.0, 100.0],         # lo == 0: the only case the old form got right
-        [3.0, 3.0, 3.0],            # constant: used to divide by zero
+        [-10000.0, 0.0, 10000.0],  # S2 indices x10 000: used to give [0, 2]
+        [-100.0, -55.0, -10.0],  # all negative: used to flip sign and axis
+        [0.0, 50.0, 100.0],  # lo == 0: the only case the old form got right
+        [3.0, 3.0, 3.0],  # constant: used to divide by zero
     ],
 )
 def test_environmental_layers_scaled_to_unit_range(tmp_path, values):
@@ -217,6 +234,7 @@ def test_environmental_layers_multiband_scaled_jointly(tmp_path):
 # deepssf.model
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def small_params():
     """Tiny ModelParams that fits in a few MB of RAM.
@@ -226,25 +244,28 @@ def small_params():
     concatenated before the first conv layer).
     """
     from deepssf.model import ModelParams
-    return ModelParams({
-        "batch_size": 2,
-        "image_dim": 11,
-        "pixel_size": 25,
-        "dim_in_nonspatial_to_grid": 4,
-        "dense_dim_in_nonspatial": 4,
-        "dense_dim_hidden": 8,
-        "dense_dim_in_all": 8,   # updated per test_convjointmodel_forward_shape
-        "input_channels": 6,     # 2 spatial + 4 scalar-grid channels
-        "output_channels": 2,
-        "kernel_size": 3,
-        "stride": 1,
-        "kernel_size_mp": 2,
-        "stride_mp": 2,
-        "padding": 1,
-        "num_movement_params": 12,
-        "dropout": 0.0,
-        "device": "cpu",
-    })
+
+    return ModelParams(
+        {
+            "batch_size": 2,
+            "image_dim": 11,
+            "pixel_size": 25,
+            "dim_in_nonspatial_to_grid": 4,
+            "dense_dim_in_nonspatial": 4,
+            "dense_dim_hidden": 8,
+            "dense_dim_in_all": 8,  # updated per test_convjointmodel_forward_shape
+            "input_channels": 6,  # 2 spatial + 4 scalar-grid channels
+            "output_channels": 2,
+            "kernel_size": 3,
+            "stride": 1,
+            "kernel_size_mp": 2,
+            "stride_mp": 2,
+            "padding": 1,
+            "num_movement_params": 12,
+            "dropout": 0.0,
+            "device": "cpu",
+        }
+    )
 
 
 def test_model_params_construction(small_params):
@@ -254,6 +275,7 @@ def test_model_params_construction(small_params):
 
 def test_conv2d_block_spatial_output_shape(small_params):
     from deepssf.model import Conv2d_block_spatial
+
     block = Conv2d_block_spatial(small_params)
     # input_channels=6 from the fixture
     x = torch.zeros(2, small_params.input_channels, 11, 11)
@@ -263,6 +285,7 @@ def test_conv2d_block_spatial_output_shape(small_params):
 
 def test_scalar_to_grid_block_output_shape(small_params):
     from deepssf.model import Scalar_to_Grid_Block
+
     block = Scalar_to_Grid_Block(small_params)
     x = torch.zeros(2, 4)
     out = block(x)
@@ -276,13 +299,15 @@ def test_convjointmodel_forward_shape(small_params):
     import math
 
     from deepssf.model import ConvJointModel
+
     dim = 11
     for _ in range(3):
         dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)  # conv (stride=1, pad=1 keeps dim)
-        dim = math.floor((dim - 2) / 2 + 1)           # maxpool kernel=2, stride=2
+        dim = math.floor((dim - 2) / 2 + 1)  # maxpool kernel=2, stride=2
     flat = small_params.output_channels * dim * dim
 
     from deepssf.model import ModelParams
+
     params = ModelParams({**small_params.__dict__, "dense_dim_in_all": flat})
 
     model = ConvJointModel(params)
@@ -298,6 +323,7 @@ def test_convjointmodel_forward_shape(small_params):
 def test_habitat_output_log_normalised(small_params):
     """Habitat sub-network output should sum to 1 in probability space."""
     from deepssf.model import Conv2d_block_spatial
+
     block = Conv2d_block_spatial(small_params)
     block.eval()
     x = torch.zeros(1, small_params.input_channels, 11, 11)
@@ -315,6 +341,7 @@ def test_habitat_output_log_normalised(small_params):
 # because saved checkpoints only load into a model with matching layer counts.
 # ---------------------------------------------------------------------------
 
+
 def test_conv_layer_defaults_match_original_architecture(small_params):
     from torch import nn
 
@@ -326,7 +353,7 @@ def test_conv_layer_defaults_match_original_architecture(small_params):
     hab = Conv2d_block_spatial(small_params).conv2d
     mov = Conv2d_block_toFC(small_params).conv2d
     assert sum(isinstance(m, nn.Conv2d) for m in hab) == 4
-    assert sum(isinstance(m, nn.ReLU) for m in hab) == 3      # none after the last conv
+    assert sum(isinstance(m, nn.ReLU) for m in hab) == 3  # none after the last conv
     assert sum(isinstance(m, nn.Conv2d) for m in mov) == 3
     assert sum(isinstance(m, nn.MaxPool2d) for m in mov) == 3  # one per conv
 
@@ -337,6 +364,7 @@ def test_habitat_depth_is_configurable(small_params, n_hab):
     from torch import nn
 
     from deepssf.model import Conv2d_block_spatial, ModelParams
+
     params = ModelParams({**small_params.__dict__, "n_conv_layers_hab": n_hab})
     block = Conv2d_block_spatial(params)
 
@@ -347,7 +375,7 @@ def test_habitat_depth_is_configurable(small_params, n_hab):
     assert convs[-1].out_channels == 1
 
     out = block(torch.zeros(1, params.input_channels, 11, 11))
-    assert out.shape == (1, 11, 11)                       # no pooling, dims preserved
+    assert out.shape == (1, 11, 11)  # no pooling, dims preserved
     assert abs(torch.exp(out).sum().item() - 1.0) < 1e-5
 
 
@@ -355,6 +383,7 @@ def test_habitat_depth_is_configurable(small_params, n_hab):
 def test_movement_depth_is_configurable(small_params, n_move):
     """Flattened size must match flattened_conv_dim for any depth."""
     from deepssf.model import Conv2d_block_toFC, ModelParams, flattened_conv_dim
+
     params = ModelParams({**small_params.__dict__, "n_conv_layers_move": n_move})
     block = Conv2d_block_toFC(params)
 
@@ -377,17 +406,20 @@ def test_conv_depths_are_independent(small_params):
     from torch import nn
 
     from deepssf.model import ConvJointModel, ModelParams, flattened_conv_dim
+
     n_hab, n_move = 2, 1
-    params = ModelParams({
-        **small_params.__dict__,
-        "n_conv_layers_hab": n_hab,
-        "n_conv_layers_move": n_move,
-        "dense_dim_in_all": flattened_conv_dim(
-            image_dim=11,
-            n_conv_layers_move=n_move,
-            output_channels=small_params.output_channels,
-        ),
-    })
+    params = ModelParams(
+        {
+            **small_params.__dict__,
+            "n_conv_layers_hab": n_hab,
+            "n_conv_layers_move": n_move,
+            "dense_dim_in_all": flattened_conv_dim(
+                image_dim=11,
+                n_conv_layers_move=n_move,
+                output_channels=small_params.output_channels,
+            ),
+        }
+    )
     model = ConvJointModel(params)
 
     n_conv = lambda block: sum(  # noqa: E731
@@ -404,10 +436,9 @@ def test_conv_depths_are_independent(small_params):
 @pytest.mark.parametrize("key", ["n_conv_layers_hab", "n_conv_layers_move"])
 def test_conv_depth_below_one_rejected(small_params, key):
     from deepssf.model import Conv2d_block_spatial, Conv2d_block_toFC, ModelParams
+
     params = ModelParams({**small_params.__dict__, key: 0})
-    block = (
-        Conv2d_block_spatial if key == "n_conv_layers_hab" else Conv2d_block_toFC
-    )
+    block = Conv2d_block_spatial if key == "n_conv_layers_hab" else Conv2d_block_toFC
     with pytest.raises(ValueError, match=key):
         block(params)
 
@@ -430,12 +461,14 @@ def test_habitat_edge_buffer_tracks_habitat_depth(small_params):
 def test_flattened_conv_dim_matches_paper_architecture():
     """The published 101-pixel window / 4 channels / 3 layers case."""
     from deepssf.model import flattened_conv_dim
+
     # 101 → 50 → 25 → 12 after three conv+maxpool blocks; 4 * 12 * 12 = 576
     assert flattened_conv_dim(101, 3, 4) == 576
 
 
 def test_flattened_conv_dim_rejects_window_pooled_away():
     from deepssf.model import flattened_conv_dim
+
     with pytest.raises(ValueError, match="too small"):
         flattened_conv_dim(image_dim=11, n_conv_layers_move=6, output_channels=4)
 
@@ -444,15 +477,17 @@ def test_flattened_conv_dim_rejects_window_pooled_away():
 # deepssf.train
 # ---------------------------------------------------------------------------
 
+
 def test_negative_log_like_loss_mean():
     from deepssf.train import negativeLogLikeLoss
+
     loss_fn = negativeLogLikeLoss(reduction="mean")
     B, H, W = 2, 5, 5
     predict = torch.zeros(B, H, W, 2)
     px2 = torch.tensor([2, 2])  # observed col for each batch item
     py2 = torch.tensor([2, 2])  # observed row for each batch item
     total, hab, mov = loss_fn(predict, (px2, py2))
-    assert total.shape == ()      # scalar
+    assert total.shape == ()  # scalar
     assert torch.isfinite(total)
     assert torch.isfinite(hab)
     assert torch.isfinite(mov)
@@ -460,6 +495,7 @@ def test_negative_log_like_loss_mean():
 
 def test_negative_log_like_loss_reductions():
     from deepssf.train import negativeLogLikeLoss
+
     B, H, W = 2, 5, 5
     predict = torch.zeros(B, H, W, 2)
     px2 = torch.tensor([1, 1])
@@ -467,7 +503,7 @@ def test_negative_log_like_loss_reductions():
     target = (px2, py2)
 
     mean_total, _, _ = negativeLogLikeLoss("mean")(predict, target)
-    sum_total, _, _  = negativeLogLikeLoss("sum")(predict, target)
+    sum_total, _, _ = negativeLogLikeLoss("sum")(predict, target)
     none_total, _, _ = negativeLogLikeLoss("none")(predict, target)
 
     assert none_total.shape == (B,)
@@ -476,6 +512,7 @@ def test_negative_log_like_loss_reductions():
 
 def test_negative_log_like_loss_median():
     from deepssf.train import negativeLogLikeLoss
+
     B, H, W = 2, 5, 5
     predict = torch.zeros(B, H, W, 2)
     px2 = torch.tensor([2, 2])
@@ -486,16 +523,17 @@ def test_negative_log_like_loss_median():
 
 def test_negative_log_like_loss_freeze_movement():
     from deepssf.train import negativeLogLikeLoss
+
     B, H, W = 2, 5, 5
     predict = torch.zeros(B, H, W, 2)
     px2 = torch.tensor([2, 2])
     py2 = torch.tensor([2, 2])
-    total_frozen, _, _ = negativeLogLikeLoss(
-        "mean", freeze_movement=True
-    )(predict, (px2, py2))
-    total_joint, _, _ = negativeLogLikeLoss(
-        "mean", freeze_movement=False
-    )(predict, (px2, py2))
+    total_frozen, _, _ = negativeLogLikeLoss("mean", freeze_movement=True)(
+        predict, (px2, py2)
+    )
+    total_joint, _, _ = negativeLogLikeLoss("mean", freeze_movement=False)(
+        predict, (px2, py2)
+    )
     # With all-zero logits both should be finite; frozen uses only habitat channel
     assert torch.isfinite(total_frozen)
     assert torch.isfinite(total_joint)
@@ -503,12 +541,14 @@ def test_negative_log_like_loss_freeze_movement():
 
 def test_negative_log_like_loss_invalid_reduction():
     from deepssf.train import negativeLogLikeLoss
+
     with pytest.raises(ValueError):
         negativeLogLikeLoss("invalid")
 
 
 def test_early_stopping_counter_increments(tmp_path):
     from deepssf.train import EarlyStopping
+
     model = torch.nn.Linear(2, 1)
     es = EarlyStopping(patience=3, path=str(tmp_path / "ckpt.pt"))
 
@@ -525,6 +565,7 @@ def test_early_stopping_counter_increments(tmp_path):
 
 def test_early_stopping_resets_on_improvement(tmp_path):
     from deepssf.train import EarlyStopping
+
     model = torch.nn.Linear(2, 1)
     es = EarlyStopping(patience=3, path=str(tmp_path / "ckpt.pt"))
 
@@ -532,7 +573,7 @@ def test_early_stopping_resets_on_improvement(tmp_path):
     es(1.5, model)
     es(1.5, model)
     assert es.counter == 2
-    es(0.5, model)   # new best — counter resets
+    es(0.5, model)  # new best — counter resets
     assert es.counter == 0
     assert not es.early_stop
 
@@ -541,8 +582,10 @@ def test_early_stopping_resets_on_improvement(tmp_path):
 # deepssf.simulate
 # ---------------------------------------------------------------------------
 
+
 def test_make_simulation_inputs_shape():
     from deepssf.simulate import make_simulation_inputs
+
     x2, hours, ydays = make_simulation_inputs(
         n_steps=10, starting_yday=90, starting_hour=6
     )
@@ -555,6 +598,7 @@ def test_make_simulation_inputs_cyclic_encoding():
     import math
 
     from deepssf.simulate import make_simulation_inputs
+
     x2, _, _ = make_simulation_inputs(n_steps=1, starting_yday=1, starting_hour=0)
     # hour=0 → sin=0, cos=1
     assert abs(x2[0, 0]) < 1e-10
@@ -565,6 +609,7 @@ def test_make_simulation_inputs_cyclic_encoding():
 
 def test_make_simulation_inputs_hour_wraps():
     from deepssf.simulate import make_simulation_inputs
+
     _, hours, _ = make_simulation_inputs(n_steps=25, starting_yday=1, starting_hour=0)
     assert hours[24] == 0.0  # wraps at 24
 
@@ -596,8 +641,14 @@ def test_simulate_next_step_returns_coords_and_tensors(small_params):
     bearing = torch.zeros(1, 1)
 
     new_x, new_y, px, py = simulate_next_step(
-        model, rasters, scalars, bearing, window_size=W,
-        x_loc=W * 25 / 2, y_loc=W * 25 / 2, transform=transform,
+        model,
+        rasters,
+        scalars,
+        bearing,
+        window_size=W,
+        x_loc=W * 25 / 2,
+        y_loc=W * 25 / 2,
+        transform=transform,
     )
     assert isinstance(new_x, float)
     assert isinstance(new_y, float)
@@ -624,12 +675,14 @@ def test_simulate_trajectory_dataframe_shape(small_params):
     # This keeps the test in sync with the function automatically if columns change.
     n_scalars = make_simulation_inputs(n_steps=1, starting_yday=1)[0].shape[1]
     n_spatial = 2  # number of raster channels used in this test
-    params = ModelParams({
-        **small_params.__dict__,
-        "dim_in_nonspatial_to_grid": n_scalars,
-        "input_channels": n_spatial + n_scalars,
-        "dense_dim_in_all": flat,
-    })
+    params = ModelParams(
+        {
+            **small_params.__dict__,
+            "dim_in_nonspatial_to_grid": n_scalars,
+            "input_channels": n_spatial + n_scalars,
+            "dense_dim_in_all": flat,
+        }
+    )
     model = ConvJointModel(params)
 
     W = 11
@@ -657,9 +710,11 @@ def test_simulate_trajectory_dataframe_shape(small_params):
 # deepssf.validate
 # ---------------------------------------------------------------------------
 
+
 def _make_movement_df(n: int, x_centre: float, y_centre: float):
     """Synthetic movement DataFrame with required columns."""
     import pandas as pd
+
     rng = np.random.default_rng(0)
     xs = x_centre + rng.uniform(-50, 50, n)
     ys = y_centre + rng.uniform(-50, 50, n)
@@ -745,8 +800,11 @@ def test_validate_next_step_probs_row0_is_zero(small_params):
 
     df = _make_movement_df(4, x_centre=centre, y_centre=centre)
     result = validate_next_step_probs(
-        model, df, get_landscape=lambda _m: rasters,
-        transform=transform, window_size=W,
+        model,
+        df,
+        get_landscape=lambda _m: rasters,
+        transform=transform,
+        window_size=W,
     )
     assert result["habitat_prob"].iloc[0] == 0.0
     assert result["next_step_prob"].iloc[0] == 0.0
@@ -755,6 +813,7 @@ def test_validate_next_step_probs_row0_is_zero(small_params):
 def test_day_to_s2_month_wraps_to_1_12():
     """_day_to_s2_month always returns values in 1–12, even for multi-year yday."""
     from deepssf.validate import _day_to_s2_month
+
     for yday in (1, 90, 180, 300, 365, 400, 730):
         m = _day_to_s2_month(yday)
         assert 1 <= m <= 12, f"yday={yday} → month={m} out of range"
@@ -763,6 +822,7 @@ def test_day_to_s2_month_wraps_to_1_12():
 # ---------------------------------------------------------------------------
 # deepssf.data — integration tests against the bundled test dataset
 # ---------------------------------------------------------------------------
+
 
 def test_prepare_movement_df_columns():
     """prepare_movement_df produces the required step-format columns."""
@@ -773,9 +833,23 @@ def test_prepare_movement_df_columns():
     raw = pd.read_csv(_CSV_PATH)
     df = prepare_movement_df(raw)
 
-    required = {"x1_", "y1_", "x2_", "y2_", "t1_", "dx", "dy", "bearing",
-                "dt_hour", "hour_t1", "yday_t1",
-                "hour_t1_sin1", "hour_t1_cos1", "yday_t1_sin1", "yday_t1_cos1"}
+    required = {
+        "x1_",
+        "y1_",
+        "x2_",
+        "y2_",
+        "t1_",
+        "dx",
+        "dy",
+        "bearing",
+        "dt_hour",
+        "hour_t1",
+        "yday_t1",
+        "hour_t1_sin1",
+        "hour_t1_cos1",
+        "yday_t1_sin1",
+        "yday_t1_cos1",
+    }
     assert required.issubset(df.columns)
 
 
@@ -833,13 +907,18 @@ def test_movement_dataset_getitem_shapes():
         df.iloc[:20].reset_index(drop=True),
         _LAYER_PATHS,
         window_size=window,
-        scalar_cols=["hour_t1_sin1", "hour_t1_cos1",
-                     "yday_t1_sin1", "yday_t1_cos1", "dt_hour"],
+        scalar_cols=[
+            "hour_t1_sin1",
+            "hour_t1_cos1",
+            "yday_t1_sin1",
+            "yday_t1_cos1",
+            "dt_hour",
+        ],
     )
 
     spatial, scalars, bearing, (px2, py2), transform = dataset[0]
 
-    assert spatial.ndim == 3                    # [C, H, W]
+    assert spatial.ndim == 3  # [C, H, W]
     assert spatial.shape[-1] == window
     assert spatial.shape[-2] == window
     assert scalars.shape == (5,)
@@ -984,8 +1063,8 @@ def test_fit_returns_loss_history(small_params):
     optimisers, schedulers = make_optimisers(model)
     history = fit(
         model,
-        image_trim_pixels=3,       # number of conv layers (used only for snapshots)
-        window_size=H,         # spatial crop size (used only for snapshots)
+        image_trim_pixels=3,  # number of conv layers (used only for snapshots)
+        window_size=H,  # spatial crop size (used only for snapshots)
         dl_train=_DL(),
         dl_val=_DL(),
         loss_fn=loss_fn,
@@ -995,8 +1074,11 @@ def test_fit_returns_loss_history(small_params):
         snapshot_dir=None,
     )
     assert set(history.keys()) == {
-        "train_losses", "val_losses",
-        "val_habitat_losses", "val_movement_losses", "stage",
+        "train_losses",
+        "val_losses",
+        "val_habitat_losses",
+        "val_movement_losses",
+        "stage",
     }
     # Index 0 is the pre-training baseline, so 2 epochs give 3 rows.
     assert len(history["train_losses"]) == 3
@@ -1142,7 +1224,9 @@ def test_early_stopping_monitor_both_waits_for_both_heads(tmp_path):
 
     model = torch.nn.Linear(1, 1)
     es = EarlyStopping(
-        patience=2, monitor="both", path=str(tmp_path / "ckpt.pt"),
+        patience=2,
+        monitor="both",
+        path=str(tmp_path / "ckpt.pt"),
         trace_func=lambda _: None,
     )
 
@@ -1152,8 +1236,10 @@ def test_early_stopping_monitor_both_waits_for_both_heads(tmp_path):
     # why a plateau is modelled as a small upward drift.
     for i in range(6):
         es(
-            val_loss=10.0 - i, model=model,
-            val_habitat=10.0 - i, val_movement=5.0 + 0.01 * i,
+            val_loss=10.0 - i,
+            model=model,
+            val_habitat=10.0 - i,
+            val_movement=5.0 + 0.01 * i,
         )
         assert not es.early_stop, f"stopped at epoch {i} while habitat improving"
     assert es._head_counter["movement"] >= es.patience
@@ -1162,8 +1248,10 @@ def test_early_stopping_monitor_both_waits_for_both_heads(tmp_path):
     # Habitat now plateaus too — both counters reach patience and the run ends.
     for i in range(2):
         es(
-            val_loss=5.5, model=model,
-            val_habitat=5.5 + 0.01 * i, val_movement=5.1 + 0.01 * i,
+            val_loss=5.5,
+            model=model,
+            val_habitat=5.5 + 0.01 * i,
+            val_movement=5.1 + 0.01 * i,
         )
     assert es.early_stop
 
@@ -1193,8 +1281,9 @@ def test_early_stopping_monitor_total_unchanged(tmp_path):
     from deepssf.train import EarlyStopping
 
     model = torch.nn.Linear(1, 1)
-    es = EarlyStopping(patience=2, path=str(tmp_path / "ckpt.pt"),
-                       trace_func=lambda _: None)
+    es = EarlyStopping(
+        patience=2, path=str(tmp_path / "ckpt.pt"), trace_func=lambda _: None
+    )
     es(val_loss=1.0, model=model)
     assert not es.early_stop
     es(val_loss=2.0, model=model)
@@ -1236,8 +1325,7 @@ def test_make_dataloaders_df_parameter():
         window_size=25,
         batch_size=4,
         df=step_df,
-        scalar_cols=["hour_t1_sin1", "hour_t1_cos1",
-                     "yday_t1_sin1", "yday_t1_cos1"],
+        scalar_cols=["hour_t1_sin1", "hour_t1_cos1", "yday_t1_sin1", "yday_t1_cos1"],
     )
     assert len(dl_train) > 0
 
@@ -1255,14 +1343,20 @@ def test_make_dataloaders_prepare_flag():
         train_split=0.7,
         val_split=0.15,
         prepare=True,
-        scalar_cols=["hour_t1_sin1", "hour_t1_cos1",
-                     "yday_t1_sin1", "yday_t1_cos1", "dt_hour"],
+        scalar_cols=[
+            "hour_t1_sin1",
+            "hour_t1_cos1",
+            "yday_t1_sin1",
+            "yday_t1_cos1",
+            "dt_hour",
+        ],
     )
     assert len(dl_train) > 0
     spatial, scalars, bearing, labels, _ = next(iter(dl_train))
     px2, py2 = labels
-    assert spatial.ndim == 4       # [B, C, H, W]
+    assert spatial.ndim == 4  # [B, C, H, W]
     assert px2.shape[0] == spatial.shape[0]  # batch sizes match
+
 
 # ---------------------------------------------------------------------------
 # Numerical stability of the movement kernel
@@ -1274,29 +1368,46 @@ def test_make_dataloaders_prepare_flag():
 # gradients did not, silently poisoning the weights.
 # ---------------------------------------------------------------------------
 
+
 def _grid_block(image_dim=21, pixel_size=25, device="cpu"):
     from deepssf.model import ModelParams, Params_to_Grid_Block_ChV
-    return Params_to_Grid_Block_ChV(ModelParams({
-        "batch_size": 1, "image_dim": image_dim, "pixel_size": pixel_size,
-        "dim_in_nonspatial_to_grid": 4, "dense_dim_in_nonspatial": 4,
-        "dense_dim_hidden": 8, "dense_dim_in_all": 8, "input_channels": 6,
-        "output_channels": 2, "kernel_size": 3, "stride": 1,
-        "kernel_size_mp": 2, "stride_mp": 2, "padding": 1,
-        "num_movement_params": 12, "dropout": 0.0, "device": device,
-    }))
+
+    return Params_to_Grid_Block_ChV(
+        ModelParams(
+            {
+                "batch_size": 1,
+                "image_dim": image_dim,
+                "pixel_size": pixel_size,
+                "dim_in_nonspatial_to_grid": 4,
+                "dense_dim_in_nonspatial": 4,
+                "dense_dim_hidden": 8,
+                "dense_dim_in_all": 8,
+                "input_channels": 6,
+                "output_channels": 2,
+                "kernel_size": 3,
+                "stride": 1,
+                "kernel_size_mp": 2,
+                "stride_mp": 2,
+                "padding": 1,
+                "num_movement_params": 12,
+                "dropout": 0.0,
+                "device": device,
+            }
+        )
+    )
 
 
 @pytest.mark.parametrize(
     "label,raw",
     [
-        ("both kappas overflow I0",    {7: 4.5, 10: 4.5}),
-        ("both kappas far past I0",    {7: 8.0, 10: 8.0}),
-        ("single kappa overflow",      {7: 6.0}),
-        ("saturating mixture weight",  {2: 5.0}),
-        ("gamma shape overflows exp",  {0: 90.0}),
+        ("both kappas overflow I0", {7: 4.5, 10: 4.5}),
+        ("both kappas far past I0", {7: 8.0, 10: 8.0}),
+        ("single kappa overflow", {7: 6.0}),
+        ("saturating mixture weight", {2: 5.0}),
+        ("gamma shape overflows exp", {0: 90.0}),
         ("gamma scale underflows exp", {1: -90.0}),
-        ("all parameters large",       dict.fromkeys(range(12), 50.0)),
-        ("all parameters small",       dict.fromkeys(range(12), -50.0)),
+        ("all parameters large", dict.fromkeys(range(12), 50.0)),
+        ("all parameters small", dict.fromkeys(range(12), -50.0)),
     ],
 )
 def test_movement_grid_finite_for_extreme_params(label, raw):
@@ -1320,8 +1431,7 @@ def test_movement_grid_is_log_normalised():
     torch.manual_seed(0)
     x = torch.randn(4, 12)
     out = block(x, torch.zeros(4, 1))
-    assert torch.allclose(out.exp().sum(dim=(1, 2)),
-                          torch.ones(4), atol=1e-4)
+    assert torch.allclose(out.exp().sum(dim=(1, 2)), torch.ones(4), atol=1e-4)
 
 
 def test_mixture_weight_gradients_do_not_vanish():
@@ -1333,8 +1443,8 @@ def test_mixture_weight_gradients_do_not_vanish():
     block = _grid_block()
     x = torch.zeros(1, 12, requires_grad=True)
     with torch.no_grad():
-        x[0, 2] = 5.0     # gamma mixture weight, component 1
-        x[0, 8] = 5.0     # von Mises mixture weight, component 1
+        x[0, 2] = 5.0  # gamma mixture weight, component 1
+        x[0, 8] = 5.0  # von Mises mixture weight, component 1
 
     block(x, torch.zeros(1, 1))[0, 0, 0].backward()
     assert x.grad[0, 2] != 0.0
@@ -1364,16 +1474,33 @@ def test_grads_are_finite_helper():
 # Checkpoint format guard
 # ---------------------------------------------------------------------------
 
+
 def _tiny_model():
     from deepssf.model import ConvJointModel, ModelParams
-    return ConvJointModel(ModelParams({
-        "batch_size": 1, "image_dim": 21, "pixel_size": 25,
-        "dim_in_nonspatial_to_grid": 4, "dense_dim_in_nonspatial": 4,
-        "dense_dim_hidden": 8, "dense_dim_in_all": 8, "input_channels": 6,
-        "output_channels": 2, "kernel_size": 3, "stride": 1,
-        "kernel_size_mp": 2, "stride_mp": 2, "padding": 1,
-        "num_movement_params": 12, "dropout": 0.0, "device": "cpu",
-    }))
+
+    return ConvJointModel(
+        ModelParams(
+            {
+                "batch_size": 1,
+                "image_dim": 21,
+                "pixel_size": 25,
+                "dim_in_nonspatial_to_grid": 4,
+                "dense_dim_in_nonspatial": 4,
+                "dense_dim_hidden": 8,
+                "dense_dim_in_all": 8,
+                "input_channels": 6,
+                "output_channels": 2,
+                "kernel_size": 3,
+                "stride": 1,
+                "kernel_size_mp": 2,
+                "stride_mp": 2,
+                "padding": 1,
+                "num_movement_params": 12,
+                "dropout": 0.0,
+                "device": "cpu",
+            }
+        )
+    )
 
 
 def test_early_stopping_writes_versioned_checkpoint(tmp_path):
@@ -1409,7 +1536,7 @@ def test_load_checkpoint_rejects_legacy_by_default(tmp_path):
     from deepssf.train import load_checkpoint
 
     path = tmp_path / "legacy.pt"
-    torch.save(_tiny_model().state_dict(), path)   # pre-0.3.0 layout
+    torch.save(_tiny_model().state_dict(), path)  # pre-0.3.0 layout
 
     with pytest.raises(RuntimeError, match="pre-0.3.0"):
         load_checkpoint(str(path), _tiny_model())
@@ -1429,8 +1556,13 @@ def test_load_checkpoint_rejects_future_format(tmp_path):
     from deepssf.train import CHECKPOINT_FORMAT, load_checkpoint
 
     path = tmp_path / "future.pt"
-    torch.save({"deepssf_checkpoint_format": CHECKPOINT_FORMAT + 1,
-                "state_dict": _tiny_model().state_dict()}, path)
+    torch.save(
+        {
+            "deepssf_checkpoint_format": CHECKPOINT_FORMAT + 1,
+            "state_dict": _tiny_model().state_dict(),
+        },
+        path,
+    )
 
     with pytest.raises(RuntimeError, match="Upgrade deepssf"):
         load_checkpoint(str(path))
@@ -1440,12 +1572,19 @@ def test_load_checkpoint_rejects_future_format(tmp_path):
 # deepssf.train — recovering the architecture from a checkpoint
 # ---------------------------------------------------------------------------
 
+
 def _legacy_format2_checkpoint(path, model):
     """A format-2 checkpoint as written before model_params was recorded."""
     from deepssf.train import CHECKPOINT_FORMAT
-    torch.save({"deepssf_checkpoint_format": CHECKPOINT_FORMAT,
-                "val_loss": 1.0,
-                "state_dict": model.state_dict()}, path)
+
+    torch.save(
+        {
+            "deepssf_checkpoint_format": CHECKPOINT_FORMAT,
+            "val_loss": 1.0,
+            "state_dict": model.state_dict(),
+        },
+        path,
+    )
 
 
 def test_checkpoint_records_model_params(tmp_path):
@@ -1501,9 +1640,16 @@ def test_params_from_checkpoint_reads_shapes_when_params_absent(tmp_path):
     params = params_from_checkpoint(
         str(path), image_dim=21, pixel_size=25, n_scalar_covariates=4, device="cpu"
     )
-    for field in ("input_channels", "output_channels", "kernel_size",
-                  "n_conv_layers_hab", "n_conv_layers_move",
-                  "dense_dim_in_all", "dense_dim_hidden", "num_movement_params"):
+    for field in (
+        "input_channels",
+        "output_channels",
+        "kernel_size",
+        "n_conv_layers_hab",
+        "n_conv_layers_move",
+        "dense_dim_in_all",
+        "dense_dim_hidden",
+        "num_movement_params",
+    ):
         assert getattr(params, field) == getattr(trained.params, field), field
 
     load_checkpoint(str(path), ConvJointModel(params))
@@ -1524,7 +1670,7 @@ def test_params_from_checkpoint_rejects_wrong_window(tmp_path):
     from deepssf.train import params_from_checkpoint
 
     path = tmp_path / "legacy.pt"
-    _legacy_format2_checkpoint(path, _tiny_model())   # trained at image_dim=21
+    _legacy_format2_checkpoint(path, _tiny_model())  # trained at image_dim=21
 
     with pytest.raises(ValueError, match="flattens to"):
         params_from_checkpoint(str(path), image_dim=101, pixel_size=25)
@@ -1535,9 +1681,10 @@ def test_params_from_checkpoint_accepts_window_within_pooling_slack(tmp_path):
     from deepssf.train import params_from_checkpoint
 
     path = tmp_path / "legacy.pt"
-    _legacy_format2_checkpoint(path, _tiny_model())   # 21 → 10 → 5 → 2
+    _legacy_format2_checkpoint(path, _tiny_model())  # 21 → 10 → 5 → 2
 
-    assert params_from_checkpoint(str(path), image_dim=20, pixel_size=25).image_dim == 20
+    params = params_from_checkpoint(str(path), image_dim=20, pixel_size=25)
+    assert params.image_dim == 20
 
 
 def test_params_from_checkpoint_rejects_params_contradicting_weights(tmp_path):
@@ -1575,7 +1722,7 @@ def test_params_from_checkpoint_device_follows_this_machine(tmp_path):
     from deepssf.utils import get_device
 
     path = tmp_path / "ckpt.pt"
-    model = _tiny_model()          # the fixture builds it on 'cpu'
+    model = _tiny_model()  # the fixture builds it on 'cpu'
     EarlyStopping(path=str(path))(1.0, model)
 
     assert params_from_checkpoint(str(path)).device == get_device()
@@ -1606,6 +1753,7 @@ def test_model_params_to_dict_round_trips(small_params):
 # deepssf.simulate — multiple trajectories and saving
 # ---------------------------------------------------------------------------
 
+
 def _sim_model_and_landscape(small_params, window=11):
     """Working model + landscape/transform sized for the simulation tests."""
     import rasterio.transform
@@ -1622,12 +1770,14 @@ def _sim_model_and_landscape(small_params, window=11):
     # Match the scalar channel count to whatever make_simulation_inputs emits
     n_scalars = make_simulation_inputs(n_steps=1, starting_yday=1)[0].shape[1]
     n_spatial = 2
-    params = ModelParams({
-        **small_params.__dict__,
-        "dim_in_nonspatial_to_grid": n_scalars,
-        "input_channels": n_spatial + n_scalars,
-        "dense_dim_in_all": flat,
-    })
+    params = ModelParams(
+        {
+            **small_params.__dict__,
+            "dim_in_nonspatial_to_grid": n_scalars,
+            "input_channels": n_spatial + n_scalars,
+            "dense_dim_in_all": flat,
+        }
+    )
     model = ConvJointModel(params)
     model.eval()
 
@@ -1659,7 +1809,13 @@ def test_simulate_trajectories_batched_shape(small_params):
     assert len(df) == 15
     assert sorted(df["trajectory_id"].unique()) == [0, 1, 2]
     assert list(df.columns) == [
-        "trajectory_id", "step", "x", "y", "hour", "yday", "month_index",
+        "trajectory_id",
+        "step",
+        "x",
+        "y",
+        "hour",
+        "yday",
+        "month_index",
     ]
     # Every sampled location must sit inside the raster extent
     assert df["x"].between(0, size * 25).all()
@@ -1768,14 +1924,12 @@ def test_crop_windows_matches_single_window_helper():
     W = 7
     transform = rasterio.transform.from_origin(0, 500, 25, 25)
     rasters = [torch.rand(20, 20), torch.rand(20, 20)]
-    xs = np.array([50.0, 300.0, 12.0])   # includes a location near the edge
+    xs = np.array([50.0, 300.0, 12.0])  # includes a location near the edge
     ys = np.array([450.0, 200.0, 490.0])
 
     padded = _pad_landscape(rasters, W, "cpu")
     cols, rows = _pixel_from_coords(transform, xs, ys)
-    batch = _crop_windows(
-        padded, torch.as_tensor(cols), torch.as_tensor(rows), W
-    )
+    batch = _crop_windows(padded, torch.as_tensor(cols), torch.as_tensor(rows), W)
 
     for j, (x, y) in enumerate(zip(xs, ys, strict=True)):
         for c, raster in enumerate(rasters):
@@ -1790,12 +1944,14 @@ def test_save_trajectories_does_not_overwrite(tmp_path):
 
     from deepssf.simulate import save_trajectories
 
-    df = pd.DataFrame({
-        "trajectory_id": [0, 0, 1, 1],
-        "step": [0, 1, 0, 1],
-        "x": [1.0, 2.0, 3.0, 4.0],
-        "y": [1.0, 2.0, 3.0, 4.0],
-    })
+    df = pd.DataFrame(
+        {
+            "trajectory_id": [0, 0, 1, 1],
+            "step": [0, 1, 0, 1],
+            "x": [1.0, 2.0, 3.0, 4.0],
+            "y": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
 
     first = save_trajectories(df, tmp_path, prefix="test", date="2026-01-01")
     second = save_trajectories(df, tmp_path, prefix="test", date="2026-01-01")
@@ -1811,11 +1967,13 @@ def test_save_trajectories_split_writes_one_file_per_trajectory(tmp_path):
 
     from deepssf.simulate import save_trajectories
 
-    df = pd.DataFrame({
-        "trajectory_id": [0, 0, 1, 1],
-        "x": [1.0, 2.0, 3.0, 4.0],
-        "y": [1.0, 2.0, 3.0, 4.0],
-    })
+    df = pd.DataFrame(
+        {
+            "trajectory_id": [0, 0, 1, 1],
+            "x": [1.0, 2.0, 3.0, 4.0],
+            "y": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
     written = save_trajectories(
         df, tmp_path, prefix="test", split=True, date="2026-01-01"
     )
@@ -1828,6 +1986,7 @@ def test_save_trajectories_split_writes_one_file_per_trajectory(tmp_path):
 # deepssf.plot
 # ---------------------------------------------------------------------------
 
+
 def test_plot_trajectories_folium_builds_map():
     import pandas as pd
 
@@ -1835,11 +1994,13 @@ def test_plot_trajectories_folium_builds_map():
     from deepssf.plot import plot_trajectories_folium
 
     # A few points in EPSG:3112 (Australian Lambert), near the study area
-    df = pd.DataFrame({
-        "trajectory_id": [0, 0, 1, 1],
-        "x": [40000.0, 40100.0, 40200.0, 40300.0],
-        "y": [-1400000.0, -1400100.0, -1400200.0, -1400300.0],
-    })
+    df = pd.DataFrame(
+        {
+            "trajectory_id": [0, 0, 1, 1],
+            "x": [40000.0, 40100.0, 40200.0, 40300.0],
+            "y": [-1400000.0, -1400100.0, -1400200.0, -1400300.0],
+        }
+    )
     fmap = plot_trajectories_folium(df, src_crs="EPSG:3112")
     assert isinstance(fmap, folium.Map)
     html = fmap.get_root().render()
@@ -1874,8 +2035,14 @@ def test_simulate_next_step_jitter_scales_with_raster_resolution(small_params, c
     x_loc = y_loc = size * cell / 2
     for _ in range(25):
         new_x, new_y, px, py = simulate_next_step(
-            model, rasters, torch.zeros(1, n_scalars), torch.zeros(1, 1),
-            window_size=W, x_loc=x_loc, y_loc=y_loc, transform=transform,
+            model,
+            rasters,
+            torch.zeros(1, n_scalars),
+            torch.zeros(1, 1),
+            window_size=W,
+            x_loc=x_loc,
+            y_loc=y_loc,
+            transform=transform,
         )
         # Upper-left corner of the cell that was sampled
         centre_col, centre_row = (~transform) * (x_loc, y_loc)
@@ -1893,6 +2060,7 @@ def test_simulate_next_step_jitter_scales_with_raster_resolution(small_params, c
 # deepssf.predict
 # ---------------------------------------------------------------------------
 
+
 def _habitat_model(small_params, n_spatial=2):
     """Model whose habitat CNN takes n_spatial rasters + the simulation scalars."""
     from deepssf.model import ConvJointModel, ModelParams
@@ -1903,12 +2071,14 @@ def _habitat_model(small_params, n_spatial=2):
     for _ in range(3):
         dim = math.floor((dim + 2 * 1 - 3) / 1 + 1)
         dim = math.floor((dim - 2) / 2 + 1)
-    params = ModelParams({
-        **small_params.__dict__,
-        "dim_in_nonspatial_to_grid": n_scalars,
-        "input_channels": n_spatial + n_scalars,
-        "dense_dim_in_all": small_params.output_channels * dim * dim,
-    })
+    params = ModelParams(
+        {
+            **small_params.__dict__,
+            "dim_in_nonspatial_to_grid": n_scalars,
+            "input_channels": n_spatial + n_scalars,
+            "dense_dim_in_all": small_params.output_channels * dim * dim,
+        }
+    )
     model = ConvJointModel(params)
     model.eval()
     return model, n_scalars
@@ -1916,6 +2086,7 @@ def _habitat_model(small_params, n_spatial=2):
 
 def test_habitat_edge_buffer_matches_receptive_field(small_params):
     from deepssf.predict import habitat_edge_buffer
+
     model, _ = _habitat_model(small_params)
     # Four 3x3 convolutions, each pulling in one column of padding
     assert habitat_edge_buffer(model) == 4
@@ -1975,7 +2146,7 @@ def test_predict_habitat_landscape_matches_windowed_forward(small_params):
     half = win // 2
     cy = cx = H // 2
     crop = torch.stack(
-        [r[cy - half:cy + half + 1, cx - half:cx + half + 1] for r in rasters]
+        [r[cy - half : cy + half + 1, cx - half : cx + half + 1] for r in rasters]
     ).unsqueeze(0)
     scalar_maps = torch.zeros(1, n_scalars, win, win)
     with torch.no_grad():
@@ -1998,7 +2169,7 @@ def test_predict_habitat_landscape_matches_windowed_forward(small_params):
 _HABITAT_STAGE = [
     # (val_total, val_habitat, val_movement)
     (4.115486, 8.516167, 4.126772),
-    (4.115594, 8.481732, 4.126772),   # <- best habitat
+    (4.115594, 8.481732, 4.126772),  # <- best habitat
     (4.113183, 8.508135, 4.126772),
     (4.112547, 8.521410, 4.126772),
     (4.110984, 8.550330, 4.126772),
@@ -2043,8 +2214,8 @@ def _stamped_model(value: float):
 @pytest.mark.parametrize(
     ("checkpoint_on", "expected_epoch"),
     [
-        ("total", 9),    # last epoch: combined loss falls monotonically
-        ("active", 1),   # epoch with the lowest habitat loss
+        ("total", 9),  # last epoch: combined loss falls monotonically
+        ("active", 1),  # epoch with the lowest habitat loss
     ],
 )
 def test_checkpoint_on_selects_the_right_epoch(tmp_path, checkpoint_on, expected_epoch):
@@ -2056,8 +2227,10 @@ def test_checkpoint_on_selects_the_right_epoch(tmp_path, checkpoint_on, expected
     )
     for epoch, (total, hab, mov) in enumerate(_HABITAT_STAGE):
         stopper(
-            total, _stamped_model(epoch),
-            val_habitat=hab, val_movement=mov,
+            total,
+            _stamped_model(epoch),
+            val_habitat=hab,
+            val_movement=mov,
             active=("habitat",),
         )
 
@@ -2076,8 +2249,10 @@ def test_checkpoint_on_active_uses_total_when_all_heads_train(tmp_path):
     # Total improves; habitat gets worse.  The checkpoint should follow total.
     for epoch, (total, hab) in enumerate([(5.0, 8.0), (4.0, 8.5), (3.0, 9.0)]):
         stopper(
-            total, _stamped_model(epoch),
-            val_habitat=hab, val_movement=1.0,
+            total,
+            _stamped_model(epoch),
+            val_habitat=hab,
+            val_movement=1.0,
             active=("habitat", "movement"),
         )
 
@@ -2094,20 +2269,31 @@ def test_checkpoint_criterion_change_resets_best_score(tmp_path):
         patience=100, path=str(path), monitor="both", checkpoint_on="active"
     )
     # Habitat-only stage: criterion is habitat (8.0), a much larger number
-    stopper(4.0, _stamped_model(0), val_habitat=8.0, val_movement=4.0,
-            active=("habitat",))
+    stopper(
+        4.0, _stamped_model(0), val_habitat=8.0, val_movement=4.0, active=("habitat",)
+    )
     assert load_checkpoint(str(path))["checkpoint_criterion"] == "habitat"
 
     # Joint stage: criterion becomes total (4.5).  Without a reset, -4.5 would
     # beat the stale best of -8.0 for the wrong reason, and every later epoch
     # would be judged against a criterion it is not on.
-    stopper(4.5, _stamped_model(1), val_habitat=8.2, val_movement=4.4,
-            active=("habitat", "movement"))
+    stopper(
+        4.5,
+        _stamped_model(1),
+        val_habitat=8.2,
+        val_movement=4.4,
+        active=("habitat", "movement"),
+    )
     assert load_checkpoint(str(path))["state_dict"]["weight"].item() == 1
 
     # A worse total in the same stage must NOT save
-    stopper(4.9, _stamped_model(2), val_habitat=8.1, val_movement=4.3,
-            active=("habitat", "movement"))
+    stopper(
+        4.9,
+        _stamped_model(2),
+        val_habitat=8.1,
+        val_movement=4.3,
+        active=("habitat", "movement"),
+    )
     assert load_checkpoint(str(path))["state_dict"]["weight"].item() == 1
 
 
@@ -2118,15 +2304,22 @@ def test_head_paths_track_each_head_across_stages(tmp_path):
     hab_path = tmp_path / "best_habitat.pt"
     mov_path = tmp_path / "best_movement.pt"
     stopper = EarlyStopping(
-        patience=100, path=str(main), monitor="both",
+        patience=100,
+        path=str(main),
+        monitor="both",
         head_paths={"habitat": str(hab_path), "movement": str(mov_path)},
     )
 
     # habitat best at epoch 1, movement best at epoch 2
     rows = [(5.0, 8.5, 4.5), (4.8, 8.1, 4.6), (4.6, 8.3, 4.2)]
     for epoch, (total, hab, mov) in enumerate(rows):
-        stopper(total, _stamped_model(epoch), val_habitat=hab, val_movement=mov,
-                active=("habitat", "movement"))
+        stopper(
+            total,
+            _stamped_model(epoch),
+            val_habitat=hab,
+            val_movement=mov,
+            active=("habitat", "movement"),
+        )
 
     assert load_checkpoint(str(hab_path))["state_dict"]["weight"].item() == 1
     assert load_checkpoint(str(mov_path))["state_dict"]["weight"].item() == 2
@@ -2141,14 +2334,22 @@ def test_head_paths_survive_a_stage_reset(tmp_path):
 
     hab_path = tmp_path / "best_habitat.pt"
     stopper = EarlyStopping(
-        patience=100, path=str(tmp_path / "best.pt"), monitor="both",
+        patience=100,
+        path=str(tmp_path / "best.pt"),
+        monitor="both",
         head_paths={"habitat": str(hab_path)},
     )
-    stopper(5.0, _stamped_model(0), val_habitat=8.0, val_movement=4.0,
-            active=("habitat",))
-    stopper.reset()   # stage boundary
-    stopper(4.0, _stamped_model(1), val_habitat=8.5, val_movement=3.5,
-            active=("habitat", "movement"))
+    stopper(
+        5.0, _stamped_model(0), val_habitat=8.0, val_movement=4.0, active=("habitat",)
+    )
+    stopper.reset()  # stage boundary
+    stopper(
+        4.0,
+        _stamped_model(1),
+        val_habitat=8.5,
+        val_movement=3.5,
+        active=("habitat", "movement"),
+    )
 
     # Epoch 1's habitat is worse, so the habitat file must still hold epoch 0
     assert load_checkpoint(str(hab_path))["state_dict"]["weight"].item() == 0
@@ -2170,7 +2371,7 @@ def test_load_head_weights_loads_only_that_head(tmp_path, small_params):
     from deepssf.train import EarlyStopping, load_head_weights
 
     model_a, _ = _habitat_model(small_params)
-    model_b, _ = _habitat_model(small_params)   # different random init
+    model_b, _ = _habitat_model(small_params)  # different random init
 
     path = tmp_path / "a.pt"
     EarlyStopping(path=str(path))._save(
@@ -2231,8 +2432,8 @@ def test_conv_habitat_is_translation_equivariant(small_params):
                 torch.cat([patch.unsqueeze(0), scalars], dim=1)
             ).squeeze()
 
-    left = surface(full[:, :, :size])          # columns 0 .. size-1
-    right = surface(full[:, :, shift:])        # columns shift .. size+shift-1
+    left = surface(full[:, :, :size])  # columns 0 .. size-1
+    right = surface(full[:, :, shift:])  # columns shift .. size+shift-1
 
     rows = slice(buf, size - buf)
     # The same ground, addressed in each crop's own local coordinates
@@ -2247,19 +2448,22 @@ def test_conv_habitat_is_translation_equivariant(small_params):
 # deepssf.simulate.trajectory_heatmap
 # ---------------------------------------------------------------------------
 
+
 def _heatmap_inputs():
     """A 20x20 raster of 10 m cells with the origin at (0, 200) — north-up."""
     import pandas as pd
     import rasterio.transform
 
     transform = rasterio.transform.from_origin(0, 200, 10, 10)
-    df = pd.DataFrame({
-        "trajectory_id": [0, 0, 0, 1, 1, 1],
-        "step": [0, 1, 2, 0, 1, 2],
-        # First two locations share a cell; the rest are spread out
-        "x": [5.0, 8.0, 45.0, 5.0, 105.0, 155.0],
-        "y": [195.0, 192.0, 155.0, 195.0, 105.0, 55.0],
-    })
+    df = pd.DataFrame(
+        {
+            "trajectory_id": [0, 0, 0, 1, 1, 1],
+            "step": [0, 1, 2, 0, 1, 2],
+            # First two locations share a cell; the rest are spread out
+            "x": [5.0, 8.0, 45.0, 5.0, 105.0, 155.0],
+            "y": [195.0, 192.0, 155.0, 195.0, 105.0, 55.0],
+        }
+    )
     return df, transform, (20, 20)
 
 
@@ -2271,8 +2475,8 @@ def test_trajectory_heatmap_counts_and_placement():
 
     assert counts.shape == shape
     assert counts.sum() == len(df)
-    assert counts[0, 0] == 3        # three locations in the top-left cell
-    assert counts[4, 4] == 1        # (45, 155) → row 4, col 4
+    assert counts[0, 0] == 3  # three locations in the top-left cell
+    assert counts[4, 4] == 1  # (45, 155) → row 4, col 4
     assert hm_transform == transform  # agg=1 leaves the grid untouched
 
 
@@ -2282,8 +2486,8 @@ def test_trajectory_heatmap_burn_in_drops_early_steps():
     df, transform, shape = _heatmap_inputs()
     counts, _ = trajectory_heatmap(df, transform, shape, burn_in=2)
 
-    assert counts.sum() == 2        # only step 2 of each trajectory survives
-    assert counts[0, 0] == 0        # the release cell is gone
+    assert counts.sum() == 2  # only step 2 of each trajectory survives
+    assert counts[0, 0] == 0  # the release cell is gone
 
 
 def test_trajectory_heatmap_burn_in_without_step_column():
@@ -2291,9 +2495,7 @@ def test_trajectory_heatmap_burn_in_without_step_column():
     from deepssf.simulate import trajectory_heatmap
 
     df, transform, shape = _heatmap_inputs()
-    counts, _ = trajectory_heatmap(
-        df.drop(columns="step"), transform, shape, burn_in=2
-    )
+    counts, _ = trajectory_heatmap(df.drop(columns="step"), transform, shape, burn_in=2)
     assert counts.sum() == 2
 
 
@@ -2317,10 +2519,14 @@ def test_trajectory_heatmap_drops_out_of_extent_locations():
     from deepssf.simulate import trajectory_heatmap
 
     df, transform, shape = _heatmap_inputs()
-    outside = pd.DataFrame({
-        "trajectory_id": [0, 0], "step": [3, 4],
-        "x": [-50.0, 500.0], "y": [195.0, 195.0],
-    })
+    outside = pd.DataFrame(
+        {
+            "trajectory_id": [0, 0],
+            "step": [3, 4],
+            "x": [-50.0, 500.0],
+            "y": [195.0, 195.0],
+        }
+    )
     counts, _ = trajectory_heatmap(
         pd.concat([df, outside], ignore_index=True), transform, shape
     )
@@ -2350,6 +2556,7 @@ def test_trajectory_heatmap_rejects_total_burn_in():
 # deepssf.data.save_raster
 # ---------------------------------------------------------------------------
 
+
 def test_save_raster_roundtrip(tmp_path):
     import rasterio
     import rasterio.transform
@@ -2359,8 +2566,12 @@ def test_save_raster_roundtrip(tmp_path):
     counts = np.arange(12, dtype=np.int64).reshape(3, 4)
     transform = rasterio.transform.from_origin(0, 30, 10, 10)
     path = save_raster(
-        counts, tmp_path / "sub" / "counts.tif", transform, "EPSG:3112",
-        nodata=0, band_descriptions="simulated locations per cell",
+        counts,
+        tmp_path / "sub" / "counts.tif",
+        transform,
+        "EPSG:3112",
+        nodata=0,
+        band_descriptions="simulated locations per cell",
     )
 
     assert path.exists()
@@ -2383,8 +2594,10 @@ def test_save_raster_multiband(tmp_path):
 
     arr = np.random.default_rng(0).random((2, 3, 4)).astype("float32")
     path = save_raster(
-        arr, tmp_path / "multi.tif",
-        rasterio.transform.from_origin(0, 30, 10, 10), "EPSG:4326",
+        arr,
+        tmp_path / "multi.tif",
+        rasterio.transform.from_origin(0, 30, 10, 10),
+        "EPSG:4326",
         band_descriptions=["first", "second"],
     )
     with rasterio.open(path) as src:
@@ -2401,14 +2614,17 @@ def test_save_raster_rejects_4d(tmp_path):
 
     with pytest.raises(ValueError, match="2-D"):
         save_raster(
-            np.zeros((1, 1, 2, 2)), tmp_path / "bad.tif",
-            rasterio.transform.from_origin(0, 30, 10, 10), "EPSG:4326",
+            np.zeros((1, 1, 2, 2)),
+            tmp_path / "bad.tif",
+            rasterio.transform.from_origin(0, 30, 10, 10),
+            "EPSG:4326",
         )
 
 
 # ---------------------------------------------------------------------------
 # deepssf.plot.add_heatmap_overlay
 # ---------------------------------------------------------------------------
+
 
 def _overlay_rgba(overlay) -> np.ndarray:
     """Decode the PNG folium embedded in an ImageOverlay back to an RGBA array."""

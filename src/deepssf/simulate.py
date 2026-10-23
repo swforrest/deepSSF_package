@@ -74,7 +74,7 @@ def make_simulation_inputs(
     for i in range(n_steps):
         # Advance clock by time_between_steps hours; wrap at 24 h and 365 days
         hour = (starting_hour + i * time_between_steps) % 24
-        yday = ((starting_yday - 1 + i * time_between_steps/24) % 365) + 1
+        yday = ((starting_yday - 1 + i * time_between_steps / 24) % 365) + 1
         hour_t2[i] = hour
         yday_t2[i] = yday
         # Cyclic (sine/cosine) encoding preserves continuity at midnight and year-end
@@ -96,13 +96,15 @@ def simulate_next_step(
     x_loc: float,
     y_loc: float,
     transform: object,
-) -> tuple[float, 
-           float, 
-        #    torch.Tensor, 
-        #    torch.Tensor, 
-        #    torch.Tensor, 
-           int, 
-           int]:
+) -> tuple[
+    float,
+    float,
+    #    torch.Tensor,
+    #    torch.Tensor,
+    #    torch.Tensor,
+    int,
+    int,
+]:
     """Sample the next location from the model's predicted step distribution.
 
     Parameters
@@ -140,7 +142,11 @@ def simulate_next_step(
     # current location; returns the patch plus its top-left pixel coordinates.
     results = [
         subset_raster_with_padding_torch(
-            rt, x=x_loc, y=y_loc, window_size=window_size, transform=transform  # type: ignore[arg-type]
+            rt,
+            x=x_loc,
+            y=y_loc,
+            window_size=window_size,
+            transform=transform,  # type: ignore[arg-type]
         )
         for rt in landscape_rasters
     ]
@@ -248,13 +254,13 @@ def simulate_trajectory(
     Returns
     -------
     pd.DataFrame with columns:
-        x, 
-        y, 
-        hour, 
-        yday, 
-        month_index, 
-        # hab_log_prob, 
-        # move_log_prob, 
+        x,
+        y,
+        hour,
+        yday,
+        month_index,
+        # hab_log_prob,
+        # move_log_prob,
         # step_log_prob
     """
     model.eval()
@@ -263,8 +269,10 @@ def simulate_trajectory(
         n_steps, starting_yday, starting_hour, time_between_steps
     )
 
-    _month_fn = month_index_fn if month_index_fn is not None else (
-        lambda yday: _day_to_month_index(yday, base_year)
+    _month_fn = (
+        month_index_fn
+        if month_index_fn is not None
+        else (lambda yday: _day_to_month_index(yday, base_year))
     )
 
     rows: list[dict] = []
@@ -290,7 +298,7 @@ def simulate_trajectory(
             # Wrap precomputed scalar row as a [1, 5] tensor for the model
             scalars_to_grid = torch.tensor(x2_full[i], dtype=torch.float32).unsqueeze(0)
 
-            new_x, new_y, px, py = simulate_next_step( #hab_lp, move_lp, step_lp, 
+            new_x, new_y, px, py = simulate_next_step(  # hab_lp, move_lp, step_lp,
                 model,
                 landscape_rasters,
                 scalars_to_grid,
@@ -325,9 +333,11 @@ def simulate_trajectory(
 
     return pd.DataFrame(rows)
 
+
 # ---------------------------------------------------------------------------
 # Multiple trajectories
 # ---------------------------------------------------------------------------
+
 
 def _pixel_from_coords(
     transform, x: np.ndarray, y: np.ndarray
@@ -508,8 +518,10 @@ def simulate_trajectories_batched(
     )
     scalars_all = torch.tensor(x2_full, dtype=torch.float32, device=device)
 
-    _month_fn = month_index_fn if month_index_fn is not None else (
-        lambda yday: _day_to_month_index(yday, base_year)
+    _month_fn = (
+        month_index_fn
+        if month_index_fn is not None
+        else (lambda yday: _day_to_month_index(yday, base_year))
     )
 
     # Landscape extent, used to keep window centres inside the padded array
@@ -530,9 +542,7 @@ def simulate_trajectories_batched(
             month_index = _month_fn(yday)
             # Re-pad only when the month (and so the landscape) actually changes
             if month_index != previous_month:
-                padded = _pad_landscape(
-                    get_landscape(month_index), window_size, device
-                )
+                padded = _pad_landscape(get_landscape(month_index), window_size, device)
                 previous_month = month_index
             month_out[i] = month_index
 
@@ -580,7 +590,8 @@ def simulate_trajectories_batched(
 
             bearing = torch.tensor(
                 np.arctan2(new_y - y_loc, new_x - x_loc),
-                dtype=torch.float32, device=device,
+                dtype=torch.float32,
+                device=device,
             ).unsqueeze(1)
 
             x_loc, y_loc = new_x, new_y
@@ -725,6 +736,7 @@ def simulate_trajectories(
 # Saving
 # ---------------------------------------------------------------------------
 
+
 def save_trajectories(
     trajectories: pd.DataFrame | Sequence[pd.DataFrame],
     output_dir: str | Path,
@@ -777,9 +789,7 @@ def save_trajectories(
 
     has_ids = id_col in combined.columns
     n_traj = int(combined[id_col].nunique()) if has_ids else 1
-    n_steps = (
-        int(combined.groupby(id_col).size().max()) if has_ids else len(combined)
-    )
+    n_steps = int(combined.groupby(id_col).size().max()) if has_ids else len(combined)
 
     def _unique_path(stem: str) -> Path:
         path = out_dir / f"{stem}.csv"
@@ -808,6 +818,7 @@ def save_trajectories(
 # ---------------------------------------------------------------------------
 # Summarising
 # ---------------------------------------------------------------------------
+
 
 def trajectory_heatmap(
     trajectories: pd.DataFrame | Sequence[pd.DataFrame],

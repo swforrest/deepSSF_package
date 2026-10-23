@@ -31,8 +31,16 @@ BASEMAPS: dict[str, tuple[str, str]] = {
 
 # Qualitative palette, cycled when several trajectories are drawn.
 TRAJECTORY_COLOURS: tuple[str, ...] = (
-    "#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
-    "#42d4f4", "#f032e6", "#bfef45", "#fabed4", "#469990",
+    "#e6194b",
+    "#3cb44b",
+    "#4363d8",
+    "#f58231",
+    "#911eb4",
+    "#42d4f4",
+    "#f032e6",
+    "#bfef45",
+    "#fabed4",
+    "#469990",
 )
 
 
@@ -76,7 +84,7 @@ def plot_trajectories_folium(
     zoom_start: int = 11,
     centre: tuple[float, float] | None = None,
     colours: Sequence[str] = TRAJECTORY_COLOURS,
-    observed_colour: str = "#ffffff", 
+    observed_colour: str = "#ffffff",
     weight: float = 2.0,
     opacity: float = 0.85,
     observed_as_points: bool = True,
@@ -147,9 +155,7 @@ def plot_trajectories_folium(
             else:
                 traj_list = [("simulated", trajectories)]
         else:
-            traj_list = [
-                (f"simulated {i}", df) for i, df in enumerate(trajectories)
-            ]
+            traj_list = [(f"simulated {i}", df) for i, df in enumerate(trajectories)]
 
     if not traj_list and observed is None:
         raise ValueError("Nothing to plot: pass trajectories, observed, or both.")
@@ -186,8 +192,13 @@ def plot_trajectories_folium(
         arr = np.asarray(all_pts, dtype=float)
         centre = (float(arr[:, 0].mean()), float(arr[:, 1].mean()))
 
-    fmap = folium.Map(location=list(centre), tiles=tiles, attr=attr,
-                      zoom_start=zoom_start, control_scale=True)
+    fmap = folium.Map(
+        location=list(centre),
+        tiles=tiles,
+        attr=attr,
+        zoom_start=zoom_start,
+        control_scale=True,
+    )
 
     # --- Observed layer ---
     if obs_frames:
@@ -200,13 +211,21 @@ def plot_trajectories_folium(
                 stride = max(1, len(pts) // max_observed_points)
                 for lat, lon in pts[::stride]:
                     folium.CircleMarker(
-                        location=[lat, lon], radius=1.2, color=observed_colour,
-                        fill=True, fill_opacity=0.5, opacity=0.5, weight=0.5,
+                        location=[lat, lon],
+                        radius=1.2,
+                        color=observed_colour,
+                        fill=True,
+                        fill_opacity=0.5,
+                        opacity=0.5,
+                        weight=0.5,
                     ).add_to(obs_group)
             else:
                 folium.PolyLine(
-                    locations=pts, color=observed_colour, weight=weight,
-                    opacity=opacity, tooltip=f"observed {label}",
+                    locations=pts,
+                    color=observed_colour,
+                    weight=weight,
+                    opacity=opacity,
+                    tooltip=f"observed {label}",
                 ).add_to(obs_group)
         obs_group.add_to(fmap)
 
@@ -217,17 +236,28 @@ def plot_trajectories_folium(
         colour = colours[i % len(colours)]
         group = folium.FeatureGroup(name=label, show=True)
         folium.PolyLine(
-            locations=pts, color=colour, weight=weight, opacity=opacity,
+            locations=pts,
+            color=colour,
+            weight=weight,
+            opacity=opacity,
             tooltip=label,
         ).add_to(group)
         if markers:
             folium.CircleMarker(
-                location=pts[0], radius=5, color="#00ff00", fill=True,
-                fill_opacity=1.0, tooltip=f"{label} start",
+                location=pts[0],
+                radius=5,
+                color="#00ff00",
+                fill=True,
+                fill_opacity=1.0,
+                tooltip=f"{label} start",
             ).add_to(group)
             folium.CircleMarker(
-                location=pts[-1], radius=5, color="#ff0000", fill=True,
-                fill_opacity=1.0, tooltip=f"{label} end",
+                location=pts[-1],
+                radius=5,
+                color="#ff0000",
+                fill=True,
+                fill_opacity=1.0,
+                tooltip=f"{label} end",
             ).add_to(group)
         group.add_to(fmap)
 
@@ -337,7 +367,10 @@ def add_heatmap_overlay(
     # (colours stretched, alpha flattened to fully opaque).
     height, width = counts.shape
     dst_transform, dst_width, dst_height = calculate_default_transform(
-        src_crs, "EPSG:3857", width, height,
+        src_crs,
+        "EPSG:3857",
+        width,
+        height,
         *array_bounds(height, width, transform),
     )
     warped = np.zeros((dst_height, dst_width), dtype="float32")
@@ -353,7 +386,8 @@ def add_heatmap_overlay(
         resampling=Resampling.nearest,
     )
     west, south, east, north = transform_bounds(
-        "EPSG:3857", "EPSG:4326",
+        "EPSG:3857",
+        "EPSG:4326",
         *array_bounds(dst_height, dst_width, dst_transform),
     )
 

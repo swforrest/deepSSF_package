@@ -54,6 +54,7 @@ CHECKPOINT_FORMAT = 2
 # Loss
 # ---------------------------------------------------------------------------
 
+
 class negativeLogLikeLoss(nn.Module):
     """Negative log-likelihood loss for the deepSSF joint model output.
 
@@ -171,7 +172,7 @@ class negativeLogLikeLoss(nn.Module):
         (mean/median/sum) or 1-D [B] tensor (none).
         """
         # Unpack the two log-probability surfaces from the joint model output
-        hab_surface  = predict[:, :, :, 0]
+        hab_surface = predict[:, :, :, 0]
         move_surface = predict[:, :, :, 1]
 
         # When freeze_movement=True only habitat drives the combined loss; the
@@ -208,7 +209,7 @@ class negativeLogLikeLoss(nn.Module):
         batch_idx = torch.arange(len(px2), device=predict.device)
 
         # NLL is the negative log-prob at the observed location (lower = better fit)
-        nll      = -pred_prod[batch_idx, py2, px2]
+        nll = -pred_prod[batch_idx, py2, px2]
         hab_loss = -hab_surface[batch_idx, py2, px2]
         mov_loss = -move_surface[batch_idx, py2, px2]
 
@@ -224,6 +225,7 @@ class negativeLogLikeLoss(nn.Module):
 # ---------------------------------------------------------------------------
 # Early stopping
 # ---------------------------------------------------------------------------
+
 
 class EarlyStopping:
     """Stop training when validation loss stops improving and save the best checkpoint.
@@ -352,18 +354,18 @@ class EarlyStopping:
                     f"expected a subset of {self.HEADS}"
                 )
 
-        self.patience    = patience
-        self.verbose     = verbose
-        self.delta       = delta
-        self.path        = path
-        self.trace_func  = trace_func
-        self.monitor     = monitor
+        self.patience = patience
+        self.verbose = verbose
+        self.delta = delta
+        self.path = path
+        self.trace_func = trace_func
+        self.monitor = monitor
         self.checkpoint_on = checkpoint_on
-        self.head_paths  = dict(head_paths) if head_paths else {}
+        self.head_paths = dict(head_paths) if head_paths else {}
 
-        self.counter     = 0
-        self.best_score  = None
-        self.early_stop  = False
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
         self.val_loss_min = float("inf")
 
         # Per-head patience state, used when monitor='both'
@@ -386,9 +388,9 @@ class EarlyStopping:
         ``best_score`` and the saved checkpoint are deliberately left intact:
         the best model so far is still the best model.
         """
-        self.counter     = 0
-        self.early_stop  = False
-        self._head_best   = {h: None for h in self.HEADS}
+        self.counter = 0
+        self.early_stop = False
+        self._head_best = {h: None for h in self.HEADS}
         self._head_counter = {h: 0 for h in self.HEADS}
 
     def __call__(
@@ -426,11 +428,7 @@ class EarlyStopping:
 
         # --- Choose the criterion that decides "is this a new best?" ---------
         criterion, criterion_key = val_loss, ("total",)
-        if (
-            self.checkpoint_on == "active"
-            and active
-            and set(active) != set(self.HEADS)
-        ):
+        if self.checkpoint_on == "active" and active and set(active) != set(self.HEADS):
             missing = [h for h in active if components[h] is None]
             if missing:
                 raise ValueError(
@@ -457,8 +455,11 @@ class EarlyStopping:
             # First epoch under this criterion, or a new best: save the checkpoint
             self.best_score = score
             self._save(
-                self.path, val_loss, model,
-                criterion=criterion, criterion_name="+".join(criterion_key),
+                self.path,
+                val_loss,
+                model,
+                criterion=criterion,
+                criterion_name="+".join(criterion_key),
             )
 
         # --- Per-head checkpoints, if asked for ------------------------------
@@ -475,8 +476,11 @@ class EarlyStopping:
             if best is None or head_loss <= best - self.delta:
                 self._head_ckpt_best[head] = head_loss
                 self._save(
-                    head_path, val_loss, model,
-                    criterion=head_loss, criterion_name=head,
+                    head_path,
+                    val_loss,
+                    model,
+                    criterion=head_loss,
+                    criterion_name=head,
                 )
 
         if self.monitor == "total":
@@ -517,9 +521,7 @@ class EarlyStopping:
             f"{h}: {self._head_counter[h]}/{self.patience}" for h in active
         )
         self.trace_func(f"EarlyStopping counters — {counters}")
-        self.early_stop = all(
-            self._head_counter[h] >= self.patience for h in active
-        )
+        self.early_stop = all(self._head_counter[h] >= self.patience for h in active)
 
     def _save(
         self,
@@ -544,9 +546,7 @@ class EarlyStopping:
                 f"({self.val_loss_min:.6f} → {criterion:.6f}). Saving model…"
             )
         elif self.verbose:
-            self.trace_func(
-                f"  new best {criterion_name} ({criterion:.6f}) → {path}"
-            )
+            self.trace_func(f"  new best {criterion_name} ({criterion:.6f}) → {path}")
         # Deferred import: deepssf/__init__ imports this module, so importing it
         # at module scope would be circular.
         from deepssf import __version__
@@ -576,6 +576,7 @@ class EarlyStopping:
 # ---------------------------------------------------------------------------
 # Training / evaluation loops
 # ---------------------------------------------------------------------------
+
 
 def load_checkpoint(
     path: str,
@@ -658,16 +659,23 @@ def _architecture_from_state_dict(state: dict) -> dict:
     load a checkpoint written before ``model_params`` was recorded, and to
     verify one that has it.
     """
+
     def convs(prefix: str) -> list[str]:
         keys = [k for k in state if k.startswith(prefix) and k.endswith(".weight")]
         # 'conv_habitat.conv2d.4.weight' → 4.  Sorted numerically so keys[0] is
         # the layer that sees the input stack, whatever order torch listed them.
         return sorted(keys, key=lambda k: int(k.rsplit(".", 2)[-2]))
 
-    hab, move, ffn = convs("conv_habitat."), convs("conv_movement."), convs("fcn_movement_all.")
+    hab = convs("conv_habitat.")
+    move = convs("conv_movement.")
+    ffn = convs("fcn_movement_all.")
     missing = [
-        name for name, keys in
-        (("conv_habitat", hab), ("conv_movement", move), ("fcn_movement_all", ffn))
+        name
+        for name, keys in (
+            ("conv_habitat", hab),
+            ("conv_movement", move),
+            ("fcn_movement_all", ffn),
+        )
         if not keys
     ]
     if missing:
@@ -681,13 +689,13 @@ def _architecture_from_state_dict(state: dict) -> dict:
     return {
         # The first habitat conv sees the whole input stack: raster bands plus
         # the scalar covariates, which are broadcast to grids and concatenated.
-        "input_channels":      int(first_conv.shape[1]),
-        "output_channels":     int(first_conv.shape[0]),
-        "kernel_size":         int(first_conv.shape[2]),
-        "n_conv_layers_hab":   len(hab),
-        "n_conv_layers_move":  len(move),
-        "dense_dim_in_all":    int(state[ffn[0]].shape[1]),
-        "dense_dim_hidden":    int(state[ffn[0]].shape[0]),
+        "input_channels": int(first_conv.shape[1]),
+        "output_channels": int(first_conv.shape[0]),
+        "kernel_size": int(first_conv.shape[2]),
+        "n_conv_layers_hab": len(hab),
+        "n_conv_layers_move": len(move),
+        "dense_dim_in_all": int(state[ffn[0]].shape[1]),
+        "dense_dim_hidden": int(state[ffn[0]].shape[0]),
         "num_movement_params": int(state[ffn[-1]].shape[0]),
     }
 
@@ -704,8 +712,8 @@ _UNRECORDED_GEOMETRY = {
     "padding": 1,
     "kernel_size_mp": 2,
     "stride_mp": 2,
-    "dropout": 0.0,     # inactive under model.eval() anyway
-    "batch_size": 1,    # stored on ModelParams but never read by a layer
+    "dropout": 0.0,  # inactive under model.eval() anyway
+    "batch_size": 1,  # stored on ModelParams but never read by a layer
 }
 
 
@@ -869,9 +877,7 @@ def params_from_checkpoint(
 def _grads_are_finite(model: nn.Module) -> bool:
     """True if every populated gradient in *model* is free of NaN and Inf."""
     return all(
-        torch.isfinite(p.grad).all()
-        for p in model.parameters()
-        if p.grad is not None
+        torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None
     )
 
 
@@ -927,8 +933,7 @@ def load_head_weights(
     """
     if head not in HEAD_MODULE_PREFIXES:
         raise ValueError(
-            f"unknown head {head!r}; expected one of "
-            f"{sorted(HEAD_MODULE_PREFIXES)}"
+            f"unknown head {head!r}; expected one of {sorted(HEAD_MODULE_PREFIXES)}"
         )
 
     state = load_checkpoint(path, map_location=map_location)["state_dict"]
@@ -1026,18 +1031,18 @@ def train_loop(
     optimiser_movement, optimiser_habitat = optimisers
 
     num_batches = len(dataloader_train)
-    size        = len(dataloader_train.dataset)
+    size = len(dataloader_train.dataset)
     model.train()
-    epoch_loss  = 0.0
-    n_finite    = 0
-    n_skipped   = 0
+    epoch_loss = 0.0
+    n_finite = 0
+    n_skipped = 0
 
     for batch, (x1, x2, x3, y, _) in enumerate(dataloader_train):
         # Move batch to the active compute device (MPS / CUDA / CPU)
         x1 = x1.to(device)
         x2 = x2.to(device)
         x3 = x3.to(device)
-        y  = tuple(t.to(device) for t in y)
+        y = tuple(t.to(device) for t in y)
 
         outputs = model((x1, x2, x3))
         total_loss, _, _ = loss_fn(outputs, y)
@@ -1054,7 +1059,7 @@ def train_loop(
             continue
 
         epoch_loss += total_loss.detach()
-        n_finite   += 1
+        n_finite += 1
 
         # Zero on the model rather than per-optimiser: that covers every
         # parameter, including any branch frozen for this stage, so nothing can
@@ -1069,8 +1074,10 @@ def train_loop(
         if not _grads_are_finite(model):
             n_skipped += 1
             if n_skipped <= 5:
-                print(f"  [warning] non-finite gradients at batch {batch}; "
-                      "skipping update")
+                print(
+                    f"  [warning] non-finite gradients at batch {batch}; "
+                    "skipping update"
+                )
             model.zero_grad(set_to_none=True)
             continue
 
@@ -1123,11 +1130,11 @@ def _validate(
             x1 = x1.to(device)
             x2 = x2.to(device)
             x3 = x3.to(device)
-            y  = tuple(t.to(device) for t in y)
+            y = tuple(t.to(device) for t in y)
             total, hab, mov = loss_fn(model((x1, x2, x3)), y)
             total_sum += total.detach().item()
-            hab_sum   += hab.detach().item()
-            mov_sum   += mov.detach().item()
+            hab_sum += hab.detach().item()
+            mov_sum += mov.detach().item()
 
     return total_sum / n_batches, hab_sum / n_batches, mov_sum / n_batches
 
@@ -1149,7 +1156,7 @@ def test_loop(dataloader_test, model: nn.Module, loss_fn) -> torch.Tensor:
     test_loss : torch.Tensor
         Mean loss over all batches.
     """
-    device      = get_device()
+    device = get_device()
     num_batches = len(dataloader_test)
     model.eval()
     test_loss = 0.0
@@ -1159,7 +1166,7 @@ def test_loop(dataloader_test, model: nn.Module, loss_fn) -> torch.Tensor:
             x1 = x1.to(device)
             x2 = x2.to(device)
             x3 = x3.to(device)
-            y  = tuple(t.to(device) for t in y)
+            y = tuple(t.to(device) for t in y)
             total_loss, _, _ = loss_fn(model((x1, x2, x3)), y)
             test_loss += total_loss.detach()
 
@@ -1172,6 +1179,7 @@ def test_loop(dataloader_test, model: nn.Module, loss_fn) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # Optimiser factory
 # ---------------------------------------------------------------------------
+
 
 def make_optimisers(
     model: nn.Module,
@@ -1212,9 +1220,7 @@ def make_optimisers(
         ],
         lr=lr_movement,
     )
-    opt_habitat = optim.Adam(
-        model.conv_habitat.parameters(), lr=lr_habitat
-    )
+    opt_habitat = optim.Adam(model.conv_habitat.parameters(), lr=lr_habitat)
     sched_movement = optim.lr_scheduler.ReduceLROnPlateau(
         opt_movement, patience=scheduler_patience, factor=scheduler_factor
     )
@@ -1228,6 +1234,7 @@ def make_optimisers(
 # Per-epoch reporting helpers
 # ---------------------------------------------------------------------------
 
+
 def _lr_report(before: float, after: float) -> str:
     """Format a learning rate, noting a reduction made by the scheduler."""
     if after < before:
@@ -1238,6 +1245,7 @@ def _lr_report(before: float, after: float) -> str:
 # ---------------------------------------------------------------------------
 # Per-epoch snapshot helper
 # ---------------------------------------------------------------------------
+
 
 def _save_snapshot(
     model: nn.Module,
@@ -1278,9 +1286,9 @@ def _save_snapshot(
     edge_mask = np.zeros_like(hab_log, dtype=bool)
 
     edge_mask[:, :image_trim_pixels] = True
-    edge_mask[:, window_size - image_trim_pixels:] = True
+    edge_mask[:, window_size - image_trim_pixels :] = True
     edge_mask[:image_trim_pixels, :] = True
-    edge_mask[window_size - image_trim_pixels:, :] = True
+    edge_mask[window_size - image_trim_pixels :, :] = True
 
     # Apply mask
     hab_log_plot = hab_log.copy()
@@ -1453,9 +1461,7 @@ def fit(
     """
     device = get_device()
     opt_mov, opt_hab = optimisers
-    sched_mov, sched_hab = (
-        schedulers if schedulers is not None else (None, None)
-    )
+    sched_mov, sched_hab = schedulers if schedulers is not None else (None, None)
     schedule = _normalise_stages(stages, n_epochs)
 
     if snapshot_dir is not None:
@@ -1518,14 +1524,17 @@ def fit(
             print(f"\nEpoch {epoch + 1}/{total_epochs}")
 
             train_loss = train_loop(
-                dl_train, model, loss_fn, stage_optimisers,
-                batch_size=batch_size, grad_clip=grad_clip,
+                dl_train,
+                model,
+                loss_fn,
+                stage_optimisers,
+                batch_size=batch_size,
+                grad_clip=grad_clip,
             )
 
             val_total, val_hab, val_mov = _validate(model, dl_val, loss_fn, device)
             print(
-                f"Val loss: {val_total:.6f}"
-                f"  (hab: {val_hab:.6f}, mov: {val_mov:.6f})"
+                f"Val loss: {val_total:.6f}  (hab: {val_hab:.6f}, mov: {val_mov:.6f})"
             )
             record(float(train_loss), (val_total, val_hab, val_mov), stage_idx)
 
@@ -1553,17 +1562,25 @@ def fit(
 
             if snapshot_dir is not None:
                 _save_snapshot(
-                    model,  image_trim_pixels, window_size,
-                    dl_val, snapshot_item, epoch,
-                    history, snapshot_dir, device,
+                    model,
+                    image_trim_pixels,
+                    window_size,
+                    dl_val,
+                    snapshot_item,
+                    epoch,
+                    history,
+                    snapshot_dir,
+                    device,
                 )
 
             epoch += 1
 
             if early_stopping is not None:
                 early_stopping(
-                    val_total, model,
-                    val_habitat=val_hab, val_movement=val_mov,
+                    val_total,
+                    model,
+                    val_habitat=val_hab,
+                    val_movement=val_mov,
                     active=active,
                 )
                 if early_stopping.early_stop:

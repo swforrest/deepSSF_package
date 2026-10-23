@@ -10,16 +10,16 @@ from __future__ import annotations
 import glob
 import os
 import re
+from datetime import date
+from pathlib import Path
 
 import numpy as np
 import torch
 
-from pathlib import Path
-from datetime import date
-
 # ---------------------------------------------------------------------------
 # Device
 # ---------------------------------------------------------------------------
+
 
 def get_device() -> str:
     """Return 'cuda', 'mps', or 'cpu' depending on hardware availability."""
@@ -34,10 +34,11 @@ def get_device() -> str:
 # Create output directory with date and index
 # ---------------------------------------------------------------------------
 
+
 def get_output_dir(base="outputs"):
     today = date.today().isoformat()  # e.g. "2026-08-17"
     base_path = Path(base)
-    
+
     i = 1
     while True:
         candidate = base_path / f"{today}_{i}"
@@ -50,6 +51,7 @@ def get_output_dir(base="outputs"):
 # ---------------------------------------------------------------------------
 # Raster window extraction
 # ---------------------------------------------------------------------------
+
 
 def subset_raster_with_padding_torch(
     raster_tensor: torch.Tensor,
@@ -290,6 +292,7 @@ def subset_layer_vectorized(
 # Circular time decoding
 # ---------------------------------------------------------------------------
 
+
 def recover_hour(
     sin_term: float | np.ndarray, cos_term: float | np.ndarray
 ) -> float | np.ndarray:
@@ -310,6 +313,7 @@ def recover_yday(
 # GPU memory
 # ---------------------------------------------------------------------------
 
+
 def clear_memory(device: str | None = None) -> None:
     """Clear CUDA or MPS memory cache (no-op on CPU)."""
     if torch.cuda.is_available():
@@ -322,9 +326,10 @@ def clear_memory(device: str | None = None) -> None:
 # GIF creation
 # ---------------------------------------------------------------------------
 
+
 def _extract_epoch_index(filename: str) -> int:
     """Extract epoch number from a filename like ``..._epoch_42...``."""
-    match = re.search(r'epoch_(\d+)', filename)
+    match = re.search(r"epoch_(\d+)", filename)
     return int(match.group(1)) if match else 0
 
 

@@ -37,15 +37,16 @@ from deepssf.utils import subset_layer_vectorized
 # Filename / date helpers
 # ---------------------------------------------------------------------------
 
+
 def extract_year_month_regex(filename: str) -> str | None:
     """Return the ``'YYYY_MM'`` substring from *filename*, or ``None``."""
-    match = re.search(r'(\d{4}_\d{2})', filename)
+    match = re.search(r"(\d{4}_\d{2})", filename)
     return match.group(1) if match else None
 
 
 def extract_datetime_regex(filename: str) -> datetime | str:
     """Return a ``datetime`` (day 15) for the ``'YYYY_MM'`` in *filename*."""
-    match = re.search(r'(\d{4}_\d{2})', filename)
+    match = re.search(r"(\d{4}_\d{2})", filename)
     if match:
         year, month = match.group(1).split("_")
         return datetime(int(year), int(month), 15)
@@ -74,6 +75,7 @@ def day_to_month_index(day_of_year: int) -> int:
 # ---------------------------------------------------------------------------
 # Raster loading
 # ---------------------------------------------------------------------------
+
 
 def load_s2_data(s2_dir: str) -> tuple[dict[str, np.ndarray], Any]:
     """Load all Sentinel-2 monthly composite TIFFs from *s2_dir*.
@@ -214,6 +216,7 @@ def load_environmental_layers(
 # Coordinate pre-computation
 # ---------------------------------------------------------------------------
 
+
 def precompute_coordinates_and_months(
     movement_df: pd.DataFrame,
     raster_transform: Any,
@@ -250,6 +253,7 @@ def precompute_coordinates_and_months(
 # ---------------------------------------------------------------------------
 # Landscape cropping utility
 # ---------------------------------------------------------------------------
+
 
 def landscape_crop(
     movement_df: pd.DataFrame,
@@ -314,6 +318,7 @@ def landscape_crop(
 # PyTorch Dataset
 # ---------------------------------------------------------------------------
 
+
 def _select_s2_month(s2_dict: dict, requested: str) -> np.ndarray:
     """Return the S2 array for *requested* month, with year ±1 fallbacks."""
     if requested in s2_dict:
@@ -375,7 +380,7 @@ class MovementDataset(Dataset):
         layer_paths: dict,
         window_size: int,
         scalar_cols: list[str] | None = None,
-        bearing_col: str = "bearing_tm1", # previous step's bearing (radians)
+        bearing_col: str = "bearing_tm1",  # previous step's bearing (radians)
     ) -> None:
         self.movement_df = movement_df.reset_index(drop=True)
         self.window_size = window_size
@@ -386,9 +391,7 @@ class MovementDataset(Dataset):
 
         cols = scalar_cols if scalar_cols is not None else _DEFAULT_SCALAR_COLS
         # Pre-extract scalar columns as a tensor: indexed by row in __getitem__
-        self.scalar_to_grid_data = torch.from_numpy(
-            movement_df[cols].values
-        ).float()
+        self.scalar_to_grid_data = torch.from_numpy(movement_df[cols].values).float()
 
         # Shift bearing by one row so each step receives the *previous* bearing
         # as input (directional persistence). Row 0 gets 0 (no prior heading).
@@ -399,14 +402,9 @@ class MovementDataset(Dataset):
         #     bearing_raw.to_numpy()
         # ).unsqueeze(1).float()
 
-        bearing_tm1: pd.Series = (
-            movement_df[bearing_col].astype(float)
-            )
+        bearing_tm1: pd.Series = movement_df[bearing_col].astype(float)
 
-        self.bearing_tm1 = torch.from_numpy(
-            bearing_tm1.to_numpy()
-        ).unsqueeze(1).float()
-        
+        self.bearing_tm1 = torch.from_numpy(bearing_tm1.to_numpy()).unsqueeze(1).float()
 
         # Pre-compute pixel coordinates for every departure and arrival location
         # so __getitem__ avoids per-sample geo-transform lookups at batch time.
@@ -416,18 +414,16 @@ class MovementDataset(Dataset):
 
         for _, row in self.movement_df.iterrows():
             px1, py1 = ~self.raster_transform * (  # type: ignore[operator]
-                row["x1_"], row["y1_"]
+                row["x1_"],
+                row["y1_"],
             )
-            self.x1y1_pixel_coords.append(
-                (int(np.floor(px1)), int(np.floor(py1)))
-            )
+            self.x1y1_pixel_coords.append((int(np.floor(px1)), int(np.floor(py1))))
 
             px2, py2 = ~self.raster_transform * (  # type: ignore[operator]
-                row["x2_"], row["y2_"]
+                row["x2_"],
+                row["y2_"],
             )
-            self.x2y2_pixel_coords_raw.append(
-                (int(np.floor(px2)), int(np.floor(py2)))
-            )
+            self.x2y2_pixel_coords_raw.append((int(np.floor(px2)), int(np.floor(py2))))
 
             # Store 'YYYY_MM' key for selecting the correct S2 monthly composite
             dt = datetime.fromisoformat(str(row["t1_"]).replace("Z", "+00:00"))
@@ -450,9 +446,7 @@ class MovementDataset(Dataset):
         # which is used below to compute the next-step pixel in local coordinates.
         if "s2" in self.environmental_layers:
             # Select the best-matching monthly composite (with year ±1 fallback)
-            s2_arr = _select_s2_month(
-                self.environmental_layers["s2"], selected_month
-            )
+            s2_arr = _select_s2_month(self.environmental_layers["s2"], selected_month)
             s2_crop, col_start, row_start = subset_layer_vectorized(
                 s2_arr, px1, py1, self.window_size
             )
@@ -494,6 +488,7 @@ class MovementDataset(Dataset):
 # ---------------------------------------------------------------------------
 # Raw telemetry → step format
 # ---------------------------------------------------------------------------
+
 
 def prepare_movement_df(
     df: pd.DataFrame,
@@ -545,8 +540,8 @@ def prepare_movement_df(
             continue
 
         # Each consecutive pair of fixes defines one step: dep → arr
-        dep = g.iloc[:-1]       # departure rows (all but last)
-        arr = g.iloc[1:]        # arrival rows  (all but first)
+        dep = g.iloc[:-1]  # departure rows (all but last)
+        arr = g.iloc[1:]  # arrival rows  (all but first)
 
         # Parse timestamps with UTC to handle mixed timezone strings
         times_dep = pd.to_datetime(dep[time_col].values, utc=True)
@@ -571,24 +566,24 @@ def prepare_movement_df(
 
         out = pd.DataFrame(
             {
-                "id":            dep[id_col].values,
-                "t1_":           dep[time_col].values,
-                "x1_":           dep[x_col].values,
-                "y1_":           dep[y_col].values,
-                "t2_":           arr[time_col].values,
-                "x2_":           arr[x_col].values,
-                "y2_":           arr[y_col].values,
-                "dx":            dx,
-                "dy":            dy,
-                "bearing":       bearings,
-                "bearing_tm1":   bearing_tm1,
-                "dt_hour":       (times_arr - times_dep).total_seconds() / 3600.0,
-                "hour_t1":       hours,
-                "yday_t1":       ydays,
-                "hour_t1_sin1":  np.sin(2 * np.pi * hours / 24),
-                "hour_t1_cos1":  np.cos(2 * np.pi * hours / 24),
-                "yday_t1_sin1":  np.sin(2 * np.pi * ydays / 365.25),
-                "yday_t1_cos1":  np.cos(2 * np.pi * ydays / 365.25),
+                "id": dep[id_col].values,
+                "t1_": dep[time_col].values,
+                "x1_": dep[x_col].values,
+                "y1_": dep[y_col].values,
+                "t2_": arr[time_col].values,
+                "x2_": arr[x_col].values,
+                "y2_": arr[y_col].values,
+                "dx": dx,
+                "dy": dy,
+                "bearing": bearings,
+                "bearing_tm1": bearing_tm1,
+                "dt_hour": (times_arr - times_dep).total_seconds() / 3600.0,
+                "hour_t1": hours,
+                "yday_t1": ydays,
+                "hour_t1_sin1": np.sin(2 * np.pi * hours / 24),
+                "hour_t1_cos1": np.cos(2 * np.pi * hours / 24),
+                "yday_t1_sin1": np.sin(2 * np.pi * ydays / 365.25),
+                "yday_t1_cos1": np.cos(2 * np.pi * ydays / 365.25),
             }
         )
         frames.append(out)
@@ -629,16 +624,14 @@ def filter_steps_by_window(
     # in each direction is (window_size - 1) / 2 pixels = half_extent metres.
     # Steps beyond this cannot be indexed within the [H, W] probability surface.
     half_extent = (window_size - 1) * pixel_size / 2
-    mask = (
-        (df["dx"].abs() < half_extent) &
-        (df["dy"].abs() < half_extent)
-    )
+    mask = (df["dx"].abs() < half_extent) & (df["dy"].abs() < half_extent)
     return df[mask].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
 # Convenience: CSV → split DataLoaders
 # ---------------------------------------------------------------------------
+
 
 def make_dataloaders(
     csv_path: str | None = None,
@@ -719,14 +712,16 @@ def make_dataloaders(
     dl_kwargs = dict(batch_size=batch_size, num_workers=num_workers)
     # Training set is shuffled each epoch; val/test are not
     dl_train = DataLoader(train_ds, shuffle=True, **dl_kwargs)
-    dl_val   = DataLoader(val_ds,   shuffle=False, **dl_kwargs)
-    dl_test  = DataLoader(test_ds,  shuffle=False, **dl_kwargs)
+    dl_val = DataLoader(val_ds, shuffle=False, **dl_kwargs)
+    dl_test = DataLoader(test_ds, shuffle=False, **dl_kwargs)
 
     return dl_train, dl_val, dl_test
+
 
 # ---------------------------------------------------------------------------
 # Raster output
 # ---------------------------------------------------------------------------
+
 
 def save_raster(
     array: np.ndarray,
@@ -800,7 +795,8 @@ def save_raster(
         band_descriptions = [band_descriptions]
 
     with rasterio.open(
-        path, "w",
+        path,
+        "w",
         driver="GTiff",
         height=array.shape[1],
         width=array.shape[2],

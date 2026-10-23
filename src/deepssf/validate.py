@@ -116,7 +116,11 @@ def validate_next_step_probs(
             # Crop a spatial patch at the departure location for each raster channel
             results = [
                 subset_raster_with_padding_torch(
-                    rt, x=x, y=y, window_size=window_size, transform=transform  # type: ignore[arg-type]
+                    rt,
+                    x=x,
+                    y=y,
+                    window_size=window_size,
+                    transform=transform,  # type: ignore[arg-type]
                 )
                 for rt in landscape_rasters
             ]
@@ -128,9 +132,13 @@ def validate_next_step_probs(
             x1 = torch.stack(list(subset_tensors), dim=0).unsqueeze(0).to(device)
 
             # Scalar inputs: [1, 4]
-            scalars = torch.tensor(
-                [float(sample[c]) for c in scalar_cols], dtype=torch.float32
-            ).unsqueeze(0).to(device)
+            scalars = (
+                torch.tensor(
+                    [float(sample[c]) for c in scalar_cols], dtype=torch.float32
+                )
+                .unsqueeze(0)
+                .to(device)
+            )
 
             # Previous bearing: [1, 1]
             bearing = torch.tensor(

@@ -89,6 +89,8 @@ packages = ["src/deepssf"]
 [tool.ruff]
 line-length = 88
 target-version = "py310"
+# Notebooks and Markdown keep their hand-aligned layout
+extend-exclude = ["*.ipynb", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]  # errors, pyflakes, import-sort, pyupgrade, bugbear

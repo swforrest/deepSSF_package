@@ -36,6 +36,7 @@ from deepssf.utils import get_device
 # Habitat sub-network
 # ---------------------------------------------------------------------------
 
+
 class Conv2d_block_spatial(nn.Module):
     """CNN block that outputs a log-normalised habitat-selection surface.
 
@@ -57,10 +58,10 @@ class Conv2d_block_spatial(nn.Module):
         super().__init__()
         ic = params.input_channels
         oc = params.output_channels
-        k  = params.kernel_size
-        s  = params.stride
-        p  = params.padding
-        n  = params.n_conv_layers_hab
+        k = params.kernel_size
+        s = params.stride
+        p = params.padding
+        n = params.n_conv_layers_hab
 
         if n < 1:
             raise ValueError(f"n_conv_layers_hab must be >= 1, got {n}")
@@ -86,6 +87,7 @@ class Conv2d_block_spatial(nn.Module):
 # Movement CNN → FC bridge
 # ---------------------------------------------------------------------------
 
+
 class Conv2d_block_toFC(nn.Module):
     """CNN block with max-pooling that flattens the spatial input for the FCN.
 
@@ -99,14 +101,14 @@ class Conv2d_block_toFC(nn.Module):
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__()
-        ic  = params.input_channels
-        oc  = params.output_channels
-        k   = params.kernel_size
-        s   = params.stride
-        p   = params.padding
+        ic = params.input_channels
+        oc = params.output_channels
+        k = params.kernel_size
+        s = params.stride
+        p = params.padding
         kmp = params.kernel_size_mp
         smp = params.stride_mp
-        n   = params.n_conv_layers_move
+        n = params.n_conv_layers_move
 
         if n < 1:
             raise ValueError(f"n_conv_layers_move must be >= 1, got {n}")
@@ -181,8 +183,8 @@ def flattened_conv_dim(
     """
     dim = image_dim
     for _ in range(n_conv_layers_move):
-        dim = (dim + 2 * padding - kernel_size) // stride + 1   # conv
-        dim = (dim - kernel_size_mp) // stride_mp + 1           # max-pool
+        dim = (dim + 2 * padding - kernel_size) // stride + 1  # conv
+        dim = (dim - kernel_size_mp) // stride_mp + 1  # max-pool
         if dim < 1:
             raise ValueError(
                 f"image_dim={image_dim} is too small for "
@@ -197,20 +199,25 @@ def flattened_conv_dim(
 # Movement fully-connected block
 # ---------------------------------------------------------------------------
 
+
 class FCN_block_all_movement(nn.Module):
     """Three-layer FCN that maps flattened spatial features to movement parameters."""
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__()
-        dim_in  = params.dense_dim_in_all
-        dim_h   = params.dense_dim_hidden
-        n_out   = params.num_movement_params
+        dim_in = params.dense_dim_in_all
+        dim_h = params.dense_dim_hidden
+        n_out = params.num_movement_params
         dropout = params.dropout
 
         self.ffn = nn.Sequential(
-            nn.Linear(dim_in, dim_h), nn.Dropout(dropout), nn.ReLU(),
-            nn.Linear(dim_h,  dim_h), nn.Dropout(dropout), nn.ReLU(),
-            nn.Linear(dim_h,  n_out),
+            nn.Linear(dim_in, dim_h),
+            nn.Dropout(dropout),
+            nn.ReLU(),
+            nn.Linear(dim_h, dim_h),
+            nn.Dropout(dropout),
+            nn.ReLU(),
+            nn.Linear(dim_h, n_out),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -220,6 +227,7 @@ class FCN_block_all_movement(nn.Module):
 # ---------------------------------------------------------------------------
 # Movement parameters → 2-D probability grid
 # ---------------------------------------------------------------------------
+
 
 class Params_to_Grid_Block(nn.Module):
     """Convert FCN movement parameters to a log-normalised 2-D movement grid.
@@ -250,16 +258,18 @@ class Params_to_Grid_Block(nn.Module):
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__()
-        self.image_dim  = params.image_dim
+        self.image_dim = params.image_dim
         self.pixel_size = params.pixel_size
-        self.device     = params.device
+        self.device = params.device
 
         center = self.image_dim // 2
         # Build pixel-index grids: y_idx increases downward, x_idx increases rightward
         y_idx, x_idx = np.indices((self.image_dim, self.image_dim))
         # Euclidean distance from the centre pixel, in CRS units (e.g. metres)
-        dist = np.sqrt((self.pixel_size * (x_idx - center)) ** 2 +
-                       (self.pixel_size * (y_idx - center)) ** 2)
+        dist = np.sqrt(
+            (self.pixel_size * (x_idx - center)) ** 2
+            + (self.pixel_size * (y_idx - center)) ** 2
+        )
         # Centre pixel has distance 0 → log(0) is undefined in the Gamma PDF.
         # Replace with E[r] for a uniform distribution within one pixel cell.
         dist[center, center] = 0.3826 * self.pixel_size  # E[r] within centre pixel
@@ -288,8 +298,10 @@ class Params_to_Grid_Block(nn.Module):
         # Log-PDF of Gamma(shape, scale) evaluated at each pixel distance r
         shape, scale = shape.to(r.device), scale.to(r.device)
         return (
-            -torch.lgamma(shape) - shape * torch.log(scale)
-            + (shape - 1) * torch.log(r) - r / scale
+            -torch.lgamma(shape)
+            - shape * torch.log(scale)
+            + (shape - 1) * torch.log(r)
+            - r / scale
         )
 
     def _vonmises_log(self, theta, kappa, mu):
@@ -338,9 +350,9 @@ class Params_to_Grid_Block(nn.Module):
         # --- Step-length kernel: 2-component Gamma mixture ---
         # FCN outputs raw scalars; _positive() bounds and exponentiates them.
         # gc2 scaled ×500 so the second component spans longer distances (heavy tail).
-        gs1 = E(self._positive(x[:, 0]), D)   # shape of Gamma component 1
-        gc1 = E(self._positive(x[:, 1]), D)   # scale of Gamma component 1
-        gs2 = E(self._positive(x[:, 3]), D)   # shape of Gamma component 2
+        gs1 = E(self._positive(x[:, 0]), D)  # shape of Gamma component 1
+        gc1 = E(self._positive(x[:, 1]), D)  # scale of Gamma component 1
+        gs2 = E(self._positive(x[:, 3]), D)  # shape of Gamma component 2
         gc2 = E(self._positive(x[:, 4]) * 500, D)  # scale of component 2 (long-range)
 
         dist = self.distance_layer
@@ -355,10 +367,10 @@ class Params_to_Grid_Block(nn.Module):
         # mu is learned as an offset from the previous bearing so the animal can
         # encode forward persistence or a preferred turn relative to its last heading.
         # mu is an offset from prev bearing; k is concentration
-        mu1 = E(x[:, 6]  + bearing[:, 0], D)
-        k1  = E(self._positive(x[:, 7]), D)
-        mu2 = E(x[:, 9]  + bearing[:, 0], D)
-        k2  = E(self._positive(x[:, 10]), D)
+        mu1 = E(x[:, 6] + bearing[:, 0], D)
+        k1 = E(self._positive(x[:, 7]), D)
+        mu2 = E(x[:, 9] + bearing[:, 0], D)
+        k2 = E(self._positive(x[:, 10]), D)
 
         vl1 = E(log_vw[0], D) + self._vonmises_log(brg, k1, mu1)
         vl2 = E(log_vw[1], D) + self._vonmises_log(brg, k2, mu2)
@@ -380,8 +392,10 @@ class Params_to_Grid_Block_ChV(Params_to_Grid_Block):
     def _gamma_log(self, r, shape, scale):
         shape, scale = shape.to(r.device), scale.to(r.device)
         return (
-            -torch.lgamma(shape) - shape * torch.log(scale)
-            + (shape - 1) * torch.log(r) - r / scale
+            -torch.lgamma(shape)
+            - shape * torch.log(scale)
+            + (shape - 1) * torch.log(r)
+            - r / scale
             - torch.log(r)
         )
 
@@ -389,6 +403,7 @@ class Params_to_Grid_Block_ChV(Params_to_Grid_Block):
 # ---------------------------------------------------------------------------
 # Scalar → 2-D grid broadcast
 # ---------------------------------------------------------------------------
+
 
 class Scalar_to_Grid_Block(nn.Module):
     """Broadcast scalar features into constant-valued spatial maps.
@@ -411,6 +426,7 @@ class Scalar_to_Grid_Block(nn.Module):
 # Full joint model
 # ---------------------------------------------------------------------------
 
+
 class ConvJointModel(nn.Module):
     """The deepSSF joint model combining habitat and movement sub-networks.
 
@@ -430,10 +446,10 @@ class ConvJointModel(nn.Module):
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__()
-        self.scalar_grid_output  = Scalar_to_Grid_Block(params)
-        self.conv_habitat        = Conv2d_block_spatial(params)
-        self.conv_movement       = Conv2d_block_toFC(params)
-        self.fcn_movement_all    = FCN_block_all_movement(params)
+        self.scalar_grid_output = Scalar_to_Grid_Block(params)
+        self.conv_habitat = Conv2d_block_spatial(params)
+        self.conv_movement = Conv2d_block_toFC(params)
+        self.fcn_movement_all = FCN_block_all_movement(params)
         self.movement_grid_output = Params_to_Grid_Block_ChV(params)
         self.device = params.device
         # Kept so a checkpoint can record the architecture it was trained with
@@ -446,15 +462,15 @@ class ConvJointModel(nn.Module):
         spatial, scalars, bearing = x[0], x[1], x[2]
         # Broadcast each scalar to a constant spatial map and concatenate with
         # the raster channels so the CNN sees both spatial and temporal context.
-        scalar_maps  = self.scalar_grid_output(scalars)
-        all_spatial  = torch.cat([spatial, scalar_maps], dim=1)
+        scalar_maps = self.scalar_grid_output(scalars)
+        all_spatial = torch.cat([spatial, scalar_maps], dim=1)
 
         # Habitat branch: CNN → log-normalised [B, H, W] surface
-        habitat_out  = self.conv_habitat(all_spatial)
+        habitat_out = self.conv_habitat(all_spatial)
         # Movement branch: CNN → flatten → FCN → 12 parameters → [B, H, W] surface
-        move_conv    = self.conv_movement(all_spatial)
-        move_params  = self.fcn_movement_all(move_conv)
-        move_out     = self.movement_grid_output(move_params, bearing)
+        move_conv = self.conv_movement(all_spatial)
+        move_params = self.fcn_movement_all(move_conv)
+        move_out = self.movement_grid_output(move_params, bearing)
 
         # Stack as last dim: [..., 0] = habitat log-prob, [..., 1] = movement log-prob.
         # Summing over this dim gives the joint log-density used by the loss function.
@@ -464,6 +480,7 @@ class ConvJointModel(nn.Module):
 # ---------------------------------------------------------------------------
 # Parameter container
 # ---------------------------------------------------------------------------
+
 
 class ModelParams:
     """Lightweight container for all model hyper-parameters.
@@ -503,27 +520,27 @@ class ModelParams:
     """
 
     def __init__(self, d: dict) -> None:
-        self.batch_size                = d["batch_size"]
-        self.image_dim                 = d["image_dim"]
-        self.pixel_size                = d["pixel_size"]
+        self.batch_size = d["batch_size"]
+        self.image_dim = d["image_dim"]
+        self.pixel_size = d["pixel_size"]
         self.dim_in_nonspatial_to_grid = d["dim_in_nonspatial_to_grid"]
-        self.dense_dim_in_nonspatial   = d["dense_dim_in_nonspatial"]
-        self.dense_dim_hidden          = d["dense_dim_hidden"]
-        self.dense_dim_in_all          = d["dense_dim_in_all"]
-        self.input_channels            = d["input_channels"]
-        self.output_channels           = d["output_channels"]
-        self.kernel_size               = d["kernel_size"]
-        self.stride                    = d["stride"]
-        self.kernel_size_mp            = d["kernel_size_mp"]
-        self.stride_mp                 = d["stride_mp"]
-        self.padding                   = d["padding"]
-        self.num_movement_params       = d["num_movement_params"]
-        self.dropout                   = d["dropout"]
+        self.dense_dim_in_nonspatial = d["dense_dim_in_nonspatial"]
+        self.dense_dim_hidden = d["dense_dim_hidden"]
+        self.dense_dim_in_all = d["dense_dim_in_all"]
+        self.input_channels = d["input_channels"]
+        self.output_channels = d["output_channels"]
+        self.kernel_size = d["kernel_size"]
+        self.stride = d["stride"]
+        self.kernel_size_mp = d["kernel_size_mp"]
+        self.stride_mp = d["stride_mp"]
+        self.padding = d["padding"]
+        self.num_movement_params = d["num_movement_params"]
+        self.dropout = d["dropout"]
         # Optional with defaults matching the original fixed architecture, so
         # params dicts written before these were configurable still work.
-        self.n_conv_layers_hab         = d.get("n_conv_layers_hab", 4)
-        self.n_conv_layers_move        = d.get("n_conv_layers_move", 3)
-        self.device                    = d.get("device", get_device())
+        self.n_conv_layers_hab = d.get("n_conv_layers_hab", 4)
+        self.n_conv_layers_move = d.get("n_conv_layers_move", 3)
+        self.device = d.get("device", get_device())
 
     #: Every field the constructor reads, in the order it reads them.  Used by
     #: :meth:`to_dict` so a new hyper-parameter is written to checkpoints as
@@ -570,6 +587,6 @@ def _plain(value):
     """Coerce *value* to a built-in type that ``weights_only=True`` can read."""
     if isinstance(value, (bool, int, float, str)) or value is None:
         return value
-    if hasattr(value, "item"):        # NumPy scalar, 0-d tensor
+    if hasattr(value, "item"):  # NumPy scalar, 0-d tensor
         return value.item()
-    return str(value)                 # torch.device, Path, ...
+    return str(value)  # torch.device, Path, ...

@@ -130,8 +130,7 @@ def predict_habitat_landscape(
     buffer = habitat_edge_buffer(model) if edge_buffer is None else int(edge_buffer)
     if 2 * buffer >= min(height, width):
         raise ValueError(
-            f"edge_buffer of {buffer} px leaves nothing of a "
-            f"{height}x{width} raster."
+            f"edge_buffer of {buffer} px leaves nothing of a {height}x{width} raster."
         )
 
     out = np.empty((height, width), dtype=np.float32)
