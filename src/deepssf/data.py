@@ -504,6 +504,7 @@ def prepare_movement_df(
     time_col: str = "time",
     x_col: str = "x",
     y_col: str = "y",
+    tz: str | None = None,
 ) -> pd.DataFrame:
     """Convert a raw telemetry DataFrame to the step format expected by
     :class:`MovementDataset`.
@@ -513,16 +514,25 @@ def prepare_movement_df(
 
     * ``x1_, y1_`` – departure location (current fix).
     * ``x2_, y2_`` – arrival location (next fix).
-    * ``t1_`` – ISO-8601 timestamp of the departure (passed to
-      :class:`MovementDataset` for S2 month look-up).
+    * ``t1_, t2_`` – timezone-aware timestamps of the departure and arrival
+      (``t1_`` is passed to :class:`MovementDataset` for S2 month look-up).
+    * ``dx, dy`` – displacement between departure and arrival (CRS units).
+    * ``sl_`` – step length, the Euclidean length of ``(dx, dy)``.
     * ``bearing`` – step bearing in radians (arctan2 of dy/dx in projected
       CRS).  Shifted inside :class:`MovementDataset` to give the *previous*
       step's bearing.
+    * ``ta_`` – turning angle in radians, ``bearing - bearing_tm1`` wrapped
+      to [-π, π).  NaN for each individual's first step.
     * ``dt_hour`` – time elapsed between consecutive fixes (hours).
+    * ``hour_t1``, ``yday_t1`` – decimal hour-of-day and day-of-year of
+      ``t1_``.
     * ``hour_t1_sin1``, ``hour_t1_cos1`` – cyclic encoding of the hour of
       ``t1_``.
     * ``yday_t1_sin1``, ``yday_t1_cos1`` – cyclic encoding of the day-of-year
       of ``t1_``.
+
+    All time-derived columns are in the timezone given by ``tz``, so that
+    hour-of-day reflects local time (e.g. dawn and dusk) rather than UTC.
 
     The last GPS fix for each individual is dropped (no arrival location).
     Individuals are processed independently and the results are concatenated.
@@ -533,12 +543,19 @@ def prepare_movement_df(
         Raw telemetry DataFrame.
     id_col, time_col, x_col, y_col:
         Column names (defaults: ``'id'``, ``'time'``, ``'x'``, ``'y'``).
+    tz:
+        Timezone to express times in, e.g. ``'Australia/Darwin'``.  If
+        ``None`` (default), the timezone of a tz-aware ``time_col`` is kept;
+        tz-naive times are treated as UTC.
 
     Returns
     -------
     pd.DataFrame
         Ready to pass directly to :class:`MovementDataset`.
     """
+    if tz is None and isinstance(df[time_col].dtype, pd.DatetimeTZDtype):
+        tz = str(df[time_col].dt.tz)
+
     frames = []
 
     for _, group in df.groupby(id_col, sort=False):
@@ -551,9 +568,13 @@ def prepare_movement_df(
         dep = g.iloc[:-1]  # departure rows (all but last)
         arr = g.iloc[1:]  # arrival rows  (all but first)
 
-        # Parse timestamps with UTC to handle mixed timezone strings
-        times_dep = pd.to_datetime(dep[time_col].values, utc=True)
-        times_arr = pd.to_datetime(arr[time_col].values, utc=True)
+        # Parse timestamps with UTC to handle mixed timezone strings, then
+        # convert to the target timezone so hour/yday are local
+        times_dep = pd.DatetimeIndex(pd.to_datetime(dep[time_col], utc=True))
+        times_arr = pd.DatetimeIndex(pd.to_datetime(arr[time_col], utc=True))
+        if tz is not None:
+            times_dep = times_dep.tz_convert(tz)
+            times_arr = times_arr.tz_convert(tz)
 
         # Raw displacements in CRS units (e.g. metres for a projected CRS)
         dx = arr[x_col].values - dep[x_col].values
@@ -571,20 +592,26 @@ def prepare_movement_df(
         bearing_tm1 = np.empty_like(bearings)
         bearing_tm1[0] = 0.0
         bearing_tm1[1:] = bearings[:-1]
+        # Turning angle: change in bearing from the previous step, wrapped to
+        # [-π, π).  Undefined for the first step (no previous bearing).
+        turning_angles = (bearings - bearing_tm1 + np.pi) % (2 * np.pi) - np.pi
+        turning_angles[0] = np.nan
 
         out = pd.DataFrame(
             {
                 "id": dep[id_col].values,
-                "t1_": dep[time_col].values,
+                "t1_": times_dep,
                 "x1_": dep[x_col].values,
                 "y1_": dep[y_col].values,
-                "t2_": arr[time_col].values,
+                "t2_": times_arr,
                 "x2_": arr[x_col].values,
                 "y2_": arr[y_col].values,
                 "dx": dx,
                 "dy": dy,
+                "sl_": np.hypot(dx, dy),
                 "bearing": bearings,
                 "bearing_tm1": bearing_tm1,
+                "ta_": turning_angles,
                 "dt_hour": (times_arr - times_dep).total_seconds() / 3600.0,
                 "hour_t1": hours,
                 "yday_t1": ydays,

@@ -87,6 +87,18 @@ def make_simulation_inputs(
     return x2_full, hour_t2, yday_t2
 
 
+def _step_times(
+    start_time, n_steps: int, time_between_steps: float
+) -> pd.DatetimeIndex:
+    """Timestamp of each simulated step, rolled forward from *start_time*.
+
+    Keeps the timezone of *start_time*, and unlike rebuilding from yday/hour it
+    carries the year and handles leap years.
+    """
+    offsets = pd.to_timedelta(np.arange(n_steps) * time_between_steps, unit="h")
+    return pd.Timestamp(start_time) + offsets
+
+
 def simulate_next_step(
     model: torch.nn.Module,
     landscape_rasters: list[torch.Tensor],
@@ -218,6 +230,7 @@ def simulate_trajectory(
     window_size: int = 101,
     base_year: int = 2018,
     month_index_fn: Callable[[float], int] | None = None,
+    start_time=None,
 ) -> pd.DataFrame:
     """Simulate a trajectory by rolling the model forward.
 
@@ -250,12 +263,18 @@ def simulate_trajectory(
         ``_day_to_month_index(yday, base_year)`` (0-based).  Pass the same
         function used in ``validate_next_step_probs`` to share a single
         *get_landscape* callable across both.
+    start_time:
+        Optional timestamp of step 0 (e.g. ``step_df["t1_"].iloc[0]``).  If
+        given, a ``time`` column is added, rolled forward from it by
+        *time_between_steps* and keeping its timezone.  It only labels the
+        output, so it should agree with *starting_yday* and *starting_hour*.
 
     Returns
     -------
     pd.DataFrame with columns:
         x,
         y,
+        time (only if *start_time* is given),
         hour,
         yday,
         month_index,
@@ -331,7 +350,14 @@ def simulate_trajectory(
 
             x_loc, y_loc = new_x, new_y
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if start_time is not None:
+        df.insert(
+            list(df.columns).index("hour"),
+            "time",
+            _step_times(start_time, n_steps, time_between_steps),
+        )
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +469,7 @@ def simulate_trajectories_batched(
     month_index_fn: Callable[[float], int] | None = None,
     device: str | torch.device | None = None,
     pixel_size: tuple[float, float] | None = None,
+    start_time=None,
 ) -> pd.DataFrame:
     """Simulate many trajectories at once, stepping them all in lockstep.
 
@@ -477,7 +504,7 @@ def simulate_trajectories_batched(
         Number of trajectories.  Inferred from the length of *start_x* when
         that is a sequence; required when *start_x* is a scalar.
     starting_yday, starting_hour, time_between_steps, window_size, base_year,
-    month_index_fn:
+    month_index_fn, start_time:
         As in :func:`simulate_trajectory`.
     device:
         Device to run on.  Defaults to the device the model is already on.
@@ -492,7 +519,8 @@ def simulate_trajectories_batched(
     -------
     pd.DataFrame
         Long format, one row per trajectory-step, with columns
-        ``trajectory_id, step, x, y, hour, yday, month_index``.
+        ``trajectory_id, step, x, y, hour, yday, month_index`` (plus ``time``
+        before ``hour`` if *start_time* is given).
     """
     if n_trajectories is None:
         n_trajectories = int(np.atleast_1d(np.asarray(start_x)).size)
@@ -599,17 +627,23 @@ def simulate_trajectories_batched(
 
     # Column-major ravel gives trajectory-major ordering (all steps of
     # trajectory 0, then trajectory 1, ...), matching the id/step columns.
-    return pd.DataFrame(
+    step_idx = np.tile(np.arange(n_steps), n_traj)
+    df = pd.DataFrame(
         {
             "trajectory_id": np.repeat(np.arange(n_traj), n_steps),
-            "step": np.tile(np.arange(n_steps), n_traj),
+            "step": step_idx,
             "x": xs_out.ravel(order="F"),
             "y": ys_out.ravel(order="F"),
-            "hour": np.tile(hour_t2, n_traj),
-            "yday": np.tile(yday_t2, n_traj),
-            "month_index": np.tile(month_out, n_traj),
+            "hour": hour_t2[step_idx],
+            "yday": yday_t2[step_idx],
+            "month_index": month_out[step_idx],
         }
     )
+    if start_time is not None:
+        # Indexing the DatetimeIndex (rather than np.tile) keeps the timezone
+        times = _step_times(start_time, n_steps, time_between_steps)
+        df.insert(list(df.columns).index("hour"), "time", times[step_idx])
+    return df
 
 
 def simulate_trajectories(
@@ -629,6 +663,7 @@ def simulate_trajectories(
     month_index_fn: Callable[[float], int] | None = None,
     n_workers: int | None = None,
     progress: bool = False,
+    start_time=None,
 ) -> pd.DataFrame:
     """Simulate *n_trajectories* trajectories and return them in one DataFrame.
 
@@ -657,6 +692,10 @@ def simulate_trajectories(
         ``min(n_trajectories, os.cpu_count())``.
     progress:
         Print a line as each trajectory finishes (sequential/parallel only).
+    start_time:
+        Optional timestamp of step 0, adding a ``time`` column (see
+        :func:`simulate_trajectory`).  A scalar, or a sequence of length
+        *n_trajectories* under ``"sequential"``/``"parallel"``.
 
     Returns
     -------
@@ -669,12 +708,26 @@ def simulate_trajectories(
     ys = _broadcast_start(start_y, n_traj, "start_y")
     ydays = _broadcast_start(starting_yday, n_traj, "starting_yday")
     hours = _broadcast_start(starting_hour, n_traj, "starting_hour")
+    # Timestamps can't go through _broadcast_start (it casts to float)
+    if pd.api.types.is_list_like(start_time):
+        start_times = list(start_time)  # type: ignore[arg-type]
+    else:
+        start_times = [start_time] * n_traj
+    if len(start_times) != n_traj:
+        raise ValueError(
+            f"start_time has {len(start_times)} values but n_trajectories is "
+            f"{n_traj}; pass a scalar or one value per trajectory."
+        )
 
     if method == "batched":
-        if len(np.unique(ydays)) > 1 or len(np.unique(hours)) > 1:
+        if (
+            len(np.unique(ydays)) > 1
+            or len(np.unique(hours)) > 1
+            or len(set(start_times)) > 1
+        ):
             raise ValueError(
                 "method='batched' steps every trajectory on a shared clock, so "
-                "starting_yday/starting_hour must be scalars. Use "
+                "starting_yday/starting_hour/start_time must be scalars. Use "
                 "method='sequential' or 'parallel' for per-trajectory times."
             )
         return simulate_trajectories_batched(
@@ -691,6 +744,7 @@ def simulate_trajectories(
             window_size=window_size,
             base_year=base_year,
             month_index_fn=month_index_fn,
+            start_time=start_times[0],
         )
 
     if method not in ("sequential", "parallel"):
@@ -713,6 +767,7 @@ def simulate_trajectories(
             window_size=window_size,
             base_year=base_year,
             month_index_fn=month_index_fn,
+            start_time=start_times[j],
         )
         df.insert(0, "step", np.arange(len(df)))
         df.insert(0, "trajectory_id", j)
