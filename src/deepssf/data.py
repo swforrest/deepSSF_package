@@ -366,8 +366,7 @@ class MovementDataset(Dataset):
         ``['hour_t1_sin1', 'hour_t1_cos1', 'yday_t1_sin1', 'yday_t1_cos1',
         'dt_hour']``.
     bearing_col:
-        Column name of the step bearing (radians).  Shifted by one row to
-        give the *previous* step's bearing.  Default: ``'bearing'``.
+        Column name of the previous step's bearing (radians). Default: ``'bearing_tm1'``
     """
 
     def __init__(
@@ -376,7 +375,7 @@ class MovementDataset(Dataset):
         layer_paths: dict,
         window_size: int,
         scalar_cols: list[str] | None = None,
-        bearing_col: str = "bearing",
+        bearing_col: str = "bearing_tm1", # previous step's bearing (radians)
     ) -> None:
         self.movement_df = movement_df.reset_index(drop=True)
         self.window_size = window_size
@@ -393,12 +392,21 @@ class MovementDataset(Dataset):
 
         # Shift bearing by one row so each step receives the *previous* bearing
         # as input (directional persistence). Row 0 gets 0 (no prior heading).
-        bearing_raw: pd.Series = (
-            movement_df[bearing_col].astype(float).shift(1).fillna(0)
-        )
+        # bearing_raw: pd.Series = (
+        #     movement_df[bearing_col].astype(float).shift(1).fillna(0)
+        # )
+        # self.bearing_tm1 = torch.from_numpy(
+        #     bearing_raw.to_numpy()
+        # ).unsqueeze(1).float()
+
+        bearing_tm1: pd.Series = (
+            movement_df[bearing_col].astype(float)
+            )
+
         self.bearing_tm1 = torch.from_numpy(
-            bearing_raw.to_numpy()
+            bearing_tm1.to_numpy()
         ).unsqueeze(1).float()
+        
 
         # Pre-compute pixel coordinates for every departure and arrival location
         # so __getitem__ avoids per-sample geo-transform lookups at batch time.
@@ -554,7 +562,7 @@ def prepare_movement_df(
 
         # Step bearing in radians: 0 = east, π/2 = north (standard arctan2 convention)
         bearings = np.arctan2(dy, dx)
-        # Previous bearing: row 0 has no predecessor so it is set to 0 (east).
+        # Previous bearing: row 0 has no previous bearing, so it is set to 0 (east).
         # MovementDataset shifts this column by one row again, so in practice
         # the model never sees a meaningful bearing for the very first step.
         bearing_tm1 = np.empty_like(bearings)
@@ -641,7 +649,7 @@ def make_dataloaders(
     val_split: float = 0.1,
     num_workers: int = 0,
     scalar_cols: list[str] | None = None,
-    bearing_col: str = "bearing",
+    bearing_col: str = "bearing_tm1",
     prepare: bool = False,
     df: pd.DataFrame | None = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
