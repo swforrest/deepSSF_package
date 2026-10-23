@@ -18,7 +18,7 @@ Forrest, S. W., Pagendam, D., Hassan, C., Potts, J. R., Drovandi, C., Bode, M., 
 
 ## Installation (pip only)
  
-If you already have a Python environment that you want to install the package into, install deepSSF with:
+If you already have a Python environment that you want to install the package into, install deepSSF using the terminal with:
 
 ```bash
 pip install deepssf
@@ -28,7 +28,7 @@ Development install (editable, with linting and testing tools):
 
 ```bash
 git clone https://github.com/swforrest/deepssf
-cd deepssf
+cd deepssf_package
 pip install -e ".[dev]"
 ```
 
