@@ -121,6 +121,14 @@ All notable changes to this project are documented here.
   dependency: `pip install "deepSSF[maps]"`.
 
 ### Fixed
+- **DataLoaders fail with `affine` 3.x** — `MovementDataset` items carried the
+  raster's `Affine` transform as their fifth element, and since `affine` 3.0
+  `Affine` is no longer a tuple, so PyTorch's `default_collate` raised a
+  `TypeError` on the first batch. The fifth element is now a `[6]` float64
+  tensor of the transform's coefficients `(a, b, c, d, e, f)`, which batches on
+  any `affine` version; rebuild the transform with `Affine(*coeffs.tolist())`,
+  or use `dataset.raster_transform`. The training and validation loops ignore
+  this element, so they are unaffected.
 - **Sub-pixel jitter was hard-coded to a 25 m cell.** `simulate_next_step`
   scattered each sampled location by a truncated normal on [0, 25] m regardless
   of the raster's actual resolution. On a 20 m raster that put up to 1.25 cells

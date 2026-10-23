@@ -354,8 +354,10 @@ class MovementDataset(Dataset):
       broadcasting into spatial maps.
     * ``bearing_tm1``     – [1] float tensor of the previous step's bearing.
     * ``next_step_pixel`` – ``(col, row)`` of the next fix within the patch.
-    * ``raster_transform`` – affine transform (passed through for downstream
-      use).
+    * ``raster_transform`` – [6] float64 tensor of the affine transform's
+      coefficients ``(a, b, c, d, e, f)``; rebuild it with
+      ``Affine(*coeffs.tolist())``.  The ``Affine`` itself is on
+      ``dataset.raster_transform``.
 
     Parameters
     ----------
@@ -387,6 +389,12 @@ class MovementDataset(Dataset):
 
         self.environmental_layers, self.raster_transform = load_environmental_layers(
             layer_paths
+        )
+        # default_collate cannot batch an Affine (affine>=3 is no longer a
+        # tuple), so items carry its six coefficients (a, b, c, d, e, f) instead
+        t = self.raster_transform
+        self.raster_transform_coeffs = torch.tensor(
+            [t.a, t.b, t.c, t.d, t.e, t.f], dtype=torch.float64
         )
 
         cols = scalar_cols if scalar_cols is not None else _DEFAULT_SCALAR_COLS
@@ -481,7 +489,7 @@ class MovementDataset(Dataset):
             self.scalar_to_grid_data[index],
             self.bearing_tm1[index],
             next_step_pixel,
-            self.raster_transform,
+            self.raster_transform_coeffs,
         )
 
 

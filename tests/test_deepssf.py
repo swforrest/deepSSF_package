@@ -895,6 +895,7 @@ def test_prepare_movement_df_cyclic_range():
 def test_movement_dataset_getitem_shapes():
     """MovementDataset __getitem__ returns correctly shaped tensors."""
     import pandas as pd
+    from affine import Affine
 
     from deepssf.data import MovementDataset, prepare_movement_df
 
@@ -923,6 +924,9 @@ def test_movement_dataset_getitem_shapes():
     assert spatial.shape[-2] == window
     assert scalars.shape == (5,)
     assert bearing.shape == (1,)
+    # A tensor (not an Affine) so default_collate can batch it on any affine
+    assert transform.shape == (6,)
+    assert Affine(*transform.tolist()) == dataset.raster_transform
 
 
 def test_prepare_movement_df_has_bearing_tm1():
