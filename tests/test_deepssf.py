@@ -1352,10 +1352,11 @@ def test_make_dataloaders_prepare_flag():
         ],
     )
     assert len(dl_train) > 0
-    spatial, scalars, bearing, labels, _ = next(iter(dl_train))
+    spatial, scalars, bearing, labels, raster_transform = next(iter(dl_train))
     px2, py2 = labels
     assert spatial.ndim == 4  # [B, C, H, W]
     assert px2.shape[0] == spatial.shape[0]  # batch sizes match
+    assert hasattr(raster_transform, "a")
 
 
 # ---------------------------------------------------------------------------

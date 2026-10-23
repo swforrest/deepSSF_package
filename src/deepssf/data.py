@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, default_collate
 
 from deepssf.utils import subset_layer_vectorized
 
@@ -709,11 +709,21 @@ def make_dataloaders(
         dataset, [train_split, val_split, test_split]
     )
 
+    def _collate_batch(batch):
+        # Keep the affine transform as a single shared object (all samples use
+        # the same raster), while default-collating the tensor/numeric fields.
+        collated = default_collate([sample[:-1] for sample in batch])
+        return (*collated, batch[0][-1])
+
     dl_kwargs = dict(batch_size=batch_size, num_workers=num_workers)
     # Training set is shuffled each epoch; val/test are not
-    dl_train = DataLoader(train_ds, shuffle=True, **dl_kwargs)
-    dl_val = DataLoader(val_ds, shuffle=False, **dl_kwargs)
-    dl_test = DataLoader(test_ds, shuffle=False, **dl_kwargs)
+    dl_train = DataLoader(
+        train_ds, shuffle=True, collate_fn=_collate_batch, **dl_kwargs
+    )
+    dl_val = DataLoader(val_ds, shuffle=False, collate_fn=_collate_batch, **dl_kwargs)
+    dl_test = DataLoader(
+        test_ds, shuffle=False, collate_fn=_collate_batch, **dl_kwargs
+    )
 
     return dl_train, dl_val, dl_test
 
