@@ -4,6 +4,51 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-23
+
+### Added
+- **Step length and turning angle columns** — `prepare_movement_df` now returns
+  `sl_` (step length, the Euclidean length of `(dx, dy)`, placed after `dx`/`dy`)
+  and `ta_` (turning angle, placed after `bearing_tm1`). `ta_` is
+  `bearing - bearing_tm1` wrapped to [-π, π), so a slight turn across the ±π
+  boundary is not reported as a near-full rotation; positive values are
+  anticlockwise turns, following the `arctan2` bearing convention. It is NaN for
+  each individual's first step, which has no previous bearing. Neither column is
+  a model input.
+- **`tz` argument to `prepare_movement_df`** — the timezone to express
+  timestamps and time-derived columns in, e.g. `"Australia/Darwin"`. When
+  omitted, the timezone of a tz-aware time column is kept; tz-naive times are
+  still treated as UTC.
+- **Timestamps on simulated trajectories** — `simulate_trajectory`,
+  `simulate_trajectories_batched` and `simulate_trajectories` take an optional
+  `start_time` and, when it is given, add a `time` column (before `hour`) rolled
+  forward from it by `time_between_steps`. Rolling forward rather than rebuilding
+  from `yday`/`hour` keeps the year (which `yday` loses when it wraps at 365)
+  and the timezone of `start_time`. It only labels the output — the model still
+  reads `starting_yday`/`starting_hour`, so these should describe the same
+  moment. `simulate_trajectories` accepts one start time per trajectory under
+  `method="sequential"`/`"parallel"`; `"batched"` requires a single value, as it
+  does for the other start-time arguments.
+- **Example notebook `deepssf_train_validate_example_v0_3_1.ipynb`** — adds
+  diagnostic summaries of the observed and simulated data: step length and
+  turning angle histograms, and both by hour of day. Turning angles are
+  summarised per hour by the circular SD and the shortest arc containing 50% of
+  the angles (which may wrap across ±π), since a mean or median sits near zero
+  whatever the spread.
+
+### Fixed
+- **Times were converted to UTC in `prepare_movement_df`.** Timestamps were
+  parsed with `utc=True` and the input's timezone was never restored, so a
+  tz-aware time column (e.g. converted to `Australia/Darwin`) still produced
+  `hour_t1`, `yday_t1` and their sine/cosine encodings in UTC — 9.5 h out for
+  Darwin, misplacing diel patterns such as dawn and dusk activity peaks. These
+  columns are now in local time, and `t1_`/`t2_` are tz-aware timestamps
+  rather than the raw input values. The Sentinel-2 month look-up in
+  `MovementDataset`, which reads `t1_`, now uses the local month too.
+  **Models trained with ≤ 0.3.0 on tz-aware times learned UTC hour encodings**,
+  so retrain them (and re-run any simulations) before comparing against data
+  prepared with this version.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added
