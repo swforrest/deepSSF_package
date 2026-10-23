@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
 ### Added
 - **Configurable convolutional depth** — `ModelParams` now takes
   `n_conv_layers_hab` and `n_conv_layers_move`, setting the depth of the two
@@ -236,6 +238,8 @@ All notable changes to this project are documented here.
 - `_expand` uses `expand` rather than `repeat`, returning a view instead of
   materialising a `[B, H, W]` copy per parameter.
 
+## [0.2.3] - 2026-05-31  
+
 ### Added
 - **`EarlyStopping(monitor='both')`.** Keeps a separate patience budget for the
   habitat and movement components and stops only once every active component has
@@ -275,6 +279,3 @@ All notable changes to this project are documented here.
   parameters, log-normalisation of the surface, and non-vanishing mixture-weight
   gradients.
 - Initial package scaffold.
-
-## [0.1.0] - TBD
-- First release.
