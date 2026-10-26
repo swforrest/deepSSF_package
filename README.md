@@ -39,6 +39,14 @@ import deepssf
 print(deepssf.__version__)
 ```
 
+## Updating the package using pip
+ 
+If you installed deepSSF using the terminal with `pip install deepssf`, you can update the package to the latest version using:
+
+```bash
+pip install --upgrade deepssf
+```
+
 ## Setting up (for users new to Python)
 
 ### 1. Install Miniconda (once, system-wide)
