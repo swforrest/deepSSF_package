@@ -62,11 +62,18 @@ def _to_lonlat(
 
 
 def _coord_pairs(
-    df: pd.DataFrame, x_col: str, y_col: str, src_crs: str
+    df: pd.DataFrame, x_col: str, y_col: str, src_crs: str, precision: int | None = None
 ) -> list[list[float]]:
-    """Return ``[[lat, lon], ...]`` pairs — the order folium expects."""
+    """Return ``[[lat, lon], ...]`` pairs — the order folium expects.
+
+    *precision* rounds to that many decimal places.  Unrounded reprojected
+    floats print with ~16 digits, which is most of the saved HTML once a map
+    holds a few hundred thousand vertices.
+    """
     sub = df[[x_col, y_col]].dropna()
     lon, lat = _to_lonlat(sub[x_col], sub[y_col], src_crs)
+    if precision is not None:
+        lat, lon = np.round(lat, precision), np.round(lon, precision)
     return [[float(a), float(b)] for a, b in zip(lat, lon, strict=True)]
 
 
@@ -90,6 +97,7 @@ def plot_trajectories_folium(
     observed_as_points: bool = True,
     max_observed_points: int = 5000,
     markers: bool = True,
+    coord_precision: int | None = 5,
     save_path: str | None = None,
 ):
     """Draw simulated (and optionally observed) trajectories on a web map.
@@ -123,11 +131,15 @@ def plot_trajectories_folium(
     observed_as_points:
         Draw *observed* as circle markers (True) or as connected lines (False).
     max_observed_points:
-        Observed locations are thinned to at most this many points; folium
-        writes every marker into the page as its own JavaScript object, so this
-        is what keeps the saved HTML to a few MB rather than tens of MB.
+        Observed locations are thinned to at most this many points.  They are
+        written as a single GeoJSON MultiPoint (about 20 bytes per point) and
+        drawn on a canvas, so ~100,000 stays responsive.
     markers:
         Add start (green) and end (red) markers to each simulated trajectory.
+    coord_precision:
+        Decimal places kept in the latitudes and longitudes written to the
+        page.  The default of 5 is ~1 m — far finer than the raster cells —
+        and roughly halves the saved HTML.  ``None`` keeps full precision.
     save_path:
         If given, also write the map to a standalone HTML file.
 
@@ -168,7 +180,8 @@ def plot_trajectories_folium(
 
     # --- Reproject everything up front (one warp call per layer) ---
     traj_coords = [
-        (label, _coord_pairs(df, x_col, y_col, src_crs)) for label, df in traj_list
+        (label, _coord_pairs(df, x_col, y_col, src_crs, coord_precision))
+        for label, df in traj_list
     ]
 
     obs_frames: list[tuple[str, pd.DataFrame]] = []
@@ -187,7 +200,8 @@ def plot_trajectories_folium(
             all_pts = [p for _, pts in traj_coords for p in pts]
         else:
             all_pts = _coord_pairs(
-                obs_frames[0][1], observed_x_col, observed_y_col, src_crs
+                obs_frames[0][1], observed_x_col, observed_y_col, src_crs,
+                coord_precision,
             )
         arr = np.asarray(all_pts, dtype=float)
         centre = (float(arr[:, 0].mean()), float(arr[:, 1].mean()))
@@ -198,27 +212,46 @@ def plot_trajectories_folium(
         attr=attr,
         zoom_start=zoom_start,
         control_scale=True,
+        # Canvas rather than one SVG element per marker — tens of thousands of
+        # observed points are otherwise slow to pan and zoom.
+        prefer_canvas=True,
     )
 
     # --- Observed layer ---
     if obs_frames:
         obs_group = folium.FeatureGroup(name="observed", show=True)
         for label, df in obs_frames:
-            pts = _coord_pairs(df, observed_x_col, observed_y_col, src_crs)
+            pts = _coord_pairs(
+                df, observed_x_col, observed_y_col, src_crs, coord_precision
+            )
             if observed_as_points:
                 # Thin by a fixed stride so the thinned track still spans the
                 # full extent (a head slice would show only the first days).
                 stride = max(1, len(pts) // max_observed_points)
-                for lat, lon in pts[::stride]:
-                    folium.CircleMarker(
-                        location=[lat, lon],
+                # One MultiPoint feature rather than a CircleMarker per point:
+                # folium writes each CircleMarker as its own ~500-byte block of
+                # JavaScript, whereas here each point costs only its coordinates.
+                multipoint = {
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": {
+                        "type": "MultiPoint",
+                        "coordinates": [[lon, lat] for lat, lon in pts[::stride]],
+                    },
+                }
+                folium.GeoJson(
+                    multipoint,
+                    name=f"observed {label}",
+                    marker=folium.CircleMarker(
                         radius=1.2,
                         color=observed_colour,
                         fill=True,
                         fill_opacity=0.5,
                         opacity=0.5,
                         weight=0.5,
-                    ).add_to(obs_group)
+                    ),
+                    control=False,
+                ).add_to(obs_group)
             else:
                 folium.PolyLine(
                     locations=pts,
