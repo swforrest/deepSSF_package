@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`scalar_cols` argument to `prepare_movement_df`** — pass the same list you
+  give `make_dataloaders`. Names the function derives (`dt_hour`, the
+  `hour_t1_*`/`yday_t1_*` encodings, …) are still computed; every other name
+  (e.g. weather covariates) is copied from each step's departure fix, so it
+  lines up with `t1_`/`x1_`/`y1_`. A name that is neither derived nor in the
+  input raises `KeyError`. Previously all other input columns were dropped.
+
 ## [0.3.1] - 2026-10-23
 
 ### Added

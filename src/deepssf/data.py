@@ -505,6 +505,7 @@ def prepare_movement_df(
     x_col: str = "x",
     y_col: str = "y",
     tz: str | None = None,
+    scalar_cols: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """Convert a raw telemetry DataFrame to the step format expected by
     :class:`MovementDataset`.
@@ -534,6 +535,11 @@ def prepare_movement_df(
     All time-derived columns are in the timezone given by ``tz``, so that
     hour-of-day reflects local time (e.g. dawn and dusk) rather than UTC.
 
+    Any other columns named in ``scalar_cols`` (e.g. weather covariates) are
+    carried over from the input and appended after the derived columns.  Their
+    values are taken from the *departure* fix of each step, so they line up
+    with ``t1_``, ``x1_`` and ``y1_``.
+
     The last GPS fix for each individual is dropped (no arrival location).
     Individuals are processed independently and the results are concatenated.
 
@@ -547,14 +553,42 @@ def prepare_movement_df(
         Timezone to express times in, e.g. ``'Australia/Darwin'``.  If
         ``None`` (default), the timezone of a tz-aware ``time_col`` is kept;
         tz-naive times are treated as UTC.
+    scalar_cols:
+        The scalar covariate columns the model will use — typically the same
+        list later passed to :func:`make_dataloaders`.  Names this function
+        derives itself (``dt_hour``, ``hour_t1_sin1`` etc.) are always
+        computed, never copied, even if a column of that name exists in
+        ``df``.  Every other name must be a column of ``df`` and is carried
+        over from the departure fix.  ``None`` (default) carries nothing over.
 
     Returns
     -------
     pd.DataFrame
         Ready to pass directly to :class:`MovementDataset`.
+
+    Raises
+    ------
+    KeyError
+        If a name in ``scalar_cols`` is neither derived here nor a column of
+        ``df``.
     """
     if tz is None and isinstance(df[time_col].dtype, pd.DatetimeTZDtype):
         tz = str(df[time_col].dt.tz)
+
+    # Columns this function computes; anything else in scalar_cols is carried
+    # over from the input.  Kept in sync with the DataFrame built below.
+    derived_cols = {
+        "id", "t1_", "x1_", "y1_", "t2_", "x2_", "y2_", "dx", "dy", "sl_",
+        "bearing", "bearing_tm1", "ta_", "dt_hour", "hour_t1", "yday_t1",
+        "hour_t1_sin1", "hour_t1_cos1", "yday_t1_sin1", "yday_t1_cos1",
+    }
+    carry_cols = [c for c in dict.fromkeys(scalar_cols or []) if c not in derived_cols]
+    missing = [c for c in carry_cols if c not in df.columns]
+    if missing:
+        raise KeyError(
+            f"scalar_cols not found in df and not derived by "
+            f"prepare_movement_df: {missing}"
+        )
 
     frames = []
 
@@ -621,6 +655,10 @@ def prepare_movement_df(
                 "yday_t1_cos1": np.cos(2 * np.pi * ydays / 365.25),
             }
         )
+        # Covariates measured at the departure fix describe the step that
+        # starts there, so take them from the same rows as t1_/x1_/y1_.
+        for col in carry_cols:
+            out[col] = dep[col].values
         frames.append(out)
 
     return pd.concat(frames, ignore_index=True)

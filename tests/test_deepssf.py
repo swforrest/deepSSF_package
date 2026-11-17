@@ -879,6 +879,50 @@ def test_prepare_movement_df_bearing_finite():
     assert np.isfinite(df["bearing"].values).all()
 
 
+def test_prepare_movement_df_scalar_cols_carried_from_departure_fix():
+    """Extra scalar_cols are copied from each step's departure fix; derived
+    names in scalar_cols are computed rather than copied."""
+    import pandas as pd
+
+    from deepssf.data import prepare_movement_df
+
+    # Rows deliberately out of time order to check the covariate follows its fix
+    raw = pd.DataFrame(
+        {
+            "id": ["a", "a", "a", "b", "b"],
+            "time": [
+                "2024-01-01T02:00:00Z",
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T01:00:00Z",
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T03:00:00Z",
+            ],
+            "x": [2.0, 0.0, 1.0, 10.0, 11.0],
+            "y": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "temp": [30.0, 10.0, 20.0, 50.0, 60.0],
+            "dt_hour": [999.0] * 5,  # must be ignored in favour of the derived value
+        }
+    )
+    df = prepare_movement_df(raw, scalar_cols=["hour_t1_sin1", "dt_hour", "temp"])
+
+    assert df["temp"].tolist() == [10.0, 20.0, 50.0]
+    assert df["dt_hour"].tolist() == [1.0, 1.0, 3.0]
+    assert list(df.columns).count("dt_hour") == 1
+
+
+def test_prepare_movement_df_scalar_cols_missing_raises():
+    """A scalar_col that is neither derived nor in df raises KeyError."""
+    import pandas as pd
+
+    from deepssf.data import prepare_movement_df
+
+    raw = pd.DataFrame(
+        {"id": ["a", "a"], "time": ["2024-01-01", "2024-01-02"], "x": [0, 1], "y": [0, 0]}
+    )
+    with pytest.raises(KeyError, match="not_a_column"):
+        prepare_movement_df(raw, scalar_cols=["dt_hour", "not_a_column"])
+
+
 def test_prepare_movement_df_cyclic_range():
     """Cyclic encodings must stay in [-1, 1]."""
     import pandas as pd
