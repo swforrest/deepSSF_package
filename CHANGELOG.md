@@ -24,12 +24,59 @@ All notable changes to this project are documented here.
     remaining layers. Matches `predict_habitat_landscape` on every valid
     cell, optionally restricted (and cropped) to a mask, and batches
     scenarios within a memory budget.
+  - **`ScalarEncoder.in_range`** gives a per-row flag for whether every ranged
+    input is within its training range.
+  - **`availability_mask`** marks the cells within a radius of a set of
+    locations (rasterise + max-pool dilation; square or disc). With a square
+    of radius `window // 2` it is exactly the union of the model's input
+    windows.
+  - **`class_selection`** gives the use, availability, selection ratio and
+    log selection ratio of each class under each habitat surface. It
+    renormalises over the valid (non-NaN, masked) cells and gives NaN for
+    classes with no available cells.
+  - **`partial_dependence`** (PDP + ICE), **`accumulated_local_effects`**,
+    **`binned_average`** (M-plots, binned like the empirical
+    `bin_weather()`) and **`h_statistic`** (Friedman's H). They take any
+    `metric_fn(encoded rows)` and a `set_fn(rows, value)` that can keep coupled
+    inputs consistent.
+  - **`step_nll`** gives the per-step negative log-likelihood under the
+    habitat head, the movement head and the joint surface (the per-step terms
+    of `negativeLogLikeLoss`).
+  - **`permutation_importance`** permutes groups of scalar columns and/or
+    raster channels together, keeping each step's target, and reports the
+    increase in NLL per head (mean ± SD over repeats).
+  - **`movement_parameters`** returns the movement head's raw and decoded
+    kernel parameters (gamma shapes, scales and weights; von Mises offsets,
+    concentrations and weights). It decodes with the grid block's own
+    `_positive` and `gamma2_scale_factor`, and raises an error for an unknown
+    kernel layout.
+  - **`kernel_summary`** gives exact, grid-based summaries of next-step
+    kernels: expected step length, SD, quantiles, P(stay), outer-ring mass,
+    turning resultant and mean turn, and optionally the next-step class
+    probabilities.
+  - **`mixture_moments`** gives the untruncated gamma-mixture mean and SD and
+    the von Mises mixture resultant (I1/I0). It accounts for whether the block
+    applies the polar Jacobian.
+  - **`mask_window_edges`** and **`next_step_surfaces`** — within a model
+    window the habitat CNN's zero-padding distorts the outer
+    `habitat_edge_buffer(model)` cells. `next_step_surfaces` returns the
+    habitat, movement and joint surfaces with those cells excluded (`-inf`)
+    from the habitat and joint surfaces, both renormalised over the interior;
+    the parametric movement kernel keeps the whole window. `kernel_summary`
+    takes `edge=` so its outer-ring (truncation) mass is measured just inside
+    the excluded border.
 - **`scalar_cols` argument to `prepare_movement_df`** — pass the same list you
   give `make_dataloaders`. Names the function derives (`dt_hour`, the
   `hour_t1_*`/`yday_t1_*` encodings, …) are still computed; every other name
   (e.g. weather covariates) is copied from each step's departure fix, so it
   lines up with `t1_`/`x1_`/`y1_`. A name that is neither derived nor in the
   input raises `KeyError`. Previously all other input columns were dropped.
+
+### Changed
+- **`Params_to_Grid_Block.gamma2_scale_factor`** — the ×500 multiplier on the
+  second gamma component's scale is now a class attribute used by `forward`,
+  so code that decodes the parameters reads the same value. No change in
+  behaviour.
 
 ## [0.3.1] - 2026-10-23
 

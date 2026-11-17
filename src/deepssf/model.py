@@ -256,6 +256,12 @@ class Params_to_Grid_Block(nn.Module):
     #: value of ≈ 88 and ``lgamma(inf) - inf`` produces NaN.
     raw_clamp: float = 10.0
 
+    #: Multiplier on the second Gamma component's scale (parameter 4), so that
+    #: component starts out spanning longer distances (the heavy tail).  A class
+    #: attribute so code that decodes the parameters (``deepssf.inference``) uses
+    #: the same value as the grid.
+    gamma2_scale_factor: float = 500.0
+
     def __init__(self, params: ModelParams) -> None:
         super().__init__()
         self.image_dim = params.image_dim
@@ -349,11 +355,12 @@ class Params_to_Grid_Block(nn.Module):
 
         # --- Step-length kernel: 2-component Gamma mixture ---
         # FCN outputs raw scalars; _positive() bounds and exponentiates them.
-        # gc2 scaled ×500 so the second component spans longer distances (heavy tail).
+        # gc2 scaled by gamma2_scale_factor (×500) so the second component spans
+        # longer distances (heavy tail).
         gs1 = E(self._positive(x[:, 0]), D)  # shape of Gamma component 1
         gc1 = E(self._positive(x[:, 1]), D)  # scale of Gamma component 1
         gs2 = E(self._positive(x[:, 3]), D)  # shape of Gamma component 2
-        gc2 = E(self._positive(x[:, 4]) * 500, D)  # scale of component 2 (long-range)
+        gc2 = E(self._positive(x[:, 4]) * self.gamma2_scale_factor, D)  # long-range
 
         dist = self.distance_layer
         gl1 = E(log_gw[0], D) + self._gamma_log(dist, gs1, gc1)

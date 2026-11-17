@@ -18,7 +18,24 @@ from deepssf.data import (
     prepare_movement_df,
     save_raster,
 )
-from deepssf.inference import HabitatLandscapePredictor, ScalarEncoder, crop_windows
+from deepssf.inference import (
+    HabitatLandscapePredictor,
+    ScalarEncoder,
+    accumulated_local_effects,
+    availability_mask,
+    binned_average,
+    class_selection,
+    crop_windows,
+    h_statistic,
+    kernel_summary,
+    mask_window_edges,
+    mixture_moments,
+    movement_parameters,
+    next_step_surfaces,
+    partial_dependence,
+    permutation_importance,
+    step_nll,
+)
 from deepssf.model import ConvJointModel, ModelParams, flattened_conv_dim
 from deepssf.plot import add_heatmap_overlay, plot_trajectories_folium
 from deepssf.predict import habitat_edge_buffer, predict_habitat_landscape
@@ -104,6 +121,19 @@ __all__ = [
     "ScalarEncoder",
     "crop_windows",
     "HabitatLandscapePredictor",
+    "availability_mask",
+    "class_selection",
+    "partial_dependence",
+    "accumulated_local_effects",
+    "binned_average",
+    "h_statistic",
+    "step_nll",
+    "permutation_importance",
+    "movement_parameters",
+    "kernel_summary",
+    "mixture_moments",
+    "mask_window_edges",
+    "next_step_surfaces",
     # utils
     "get_device",
     "get_output_dir",

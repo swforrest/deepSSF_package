@@ -744,3 +744,877 @@ def test_predictor_matches_on_accelerator(toy, device):
             ref = predict_habitat_landscape(model, toy.landscape, s, normalise=False)
             valid = ~np.isnan(out[b])
             assert np.abs(out[b][valid] - ref[valid]).max() < 1e-4
+
+
+# ---------------------------------------------------------------------------
+# availability_mask
+# ---------------------------------------------------------------------------
+
+
+def _mask_points(height, width, pix=20.0, n=12, seed=0):
+    from rasterio.transform import from_origin
+
+    x0, y0 = 1000.0, 9000.0
+    transform = from_origin(x0, y0, pix, pix)
+    rng = np.random.default_rng(seed)
+    xs = rng.uniform(x0 - 3 * pix, x0 + (width + 3) * pix, n)  # some off the raster
+    ys = rng.uniform(y0 - (height + 3) * pix, y0 + 3 * pix, n)
+    return transform, xs, ys
+
+
+def _brute_mask(height, width, transform, xs, ys, r, shape):
+    px, py = ~transform * (np.asarray(xs), np.asarray(ys))
+    px, py = np.floor(px).astype(int), np.floor(py).astype(int)
+    rows, cols = np.mgrid[0:height, 0:width]
+    out = np.zeros((height, width), dtype=bool)
+    for x, y in zip(px, py, strict=True):
+        if shape == "square":
+            out |= (np.abs(rows - y) <= r) & (np.abs(cols - x) <= r)
+        else:
+            out |= (rows - y) ** 2 + (cols - x) ** 2 <= r * r
+    return out
+
+
+@pytest.mark.parametrize("shape", ["square", "disc"])
+@pytest.mark.parametrize("r", [0, 1, 4, 10])
+def test_availability_mask_matches_brute_force(shape, r):
+    from deepssf.inference import availability_mask
+
+    height, width = 37, 52
+    transform, xs, ys = _mask_points(height, width)
+    mask = availability_mask((height, width), transform, xs, ys, r, shape=shape)
+    assert mask.dtype == bool and mask.shape == (height, width)
+    np.testing.assert_array_equal(
+        mask, _brute_mask(height, width, transform, xs, ys, r, shape)
+    )
+
+
+def test_availability_mask_is_union_of_model_windows(toy):
+    """Square mask of radius window // 2 == every cell some input window covers."""
+    from deepssf.inference import availability_mask, crop_windows
+
+    s = toy.shape
+    height, width = toy.landscape.shape[1:]
+    transform, xs, ys = _mask_points(height, width, n=6, seed=2)
+    mask = availability_mask((height, width), transform, xs, ys, s.window // 2)
+
+    # Crop windows of a raster holding each cell's flat index, then mark them
+    index = torch.arange(height * width, dtype=torch.float32).reshape(1, height, width)
+    windows = crop_windows(index, xs, ys, transform, s.window)
+    covered = np.zeros(height * width, dtype=bool)
+    ids = windows[windows >= 0].long().numpy()
+    covered[ids] = True
+    np.testing.assert_array_equal(mask, covered.reshape(height, width))
+
+
+def test_availability_mask_errors():
+    from deepssf.inference import availability_mask
+
+    transform, xs, ys = _mask_points(10, 10)
+    with pytest.raises(ValueError, match="radius_px"):
+        availability_mask((10, 10), transform, xs, ys, -1)
+    with pytest.raises(ValueError, match="shape"):
+        availability_mask((10, 10), transform, xs, ys, 2, shape="hexagon")
+
+
+# ---------------------------------------------------------------------------
+# class_selection
+# ---------------------------------------------------------------------------
+
+
+def _one_hot_classes(height, width, n_classes=4, seed=0):
+    rng = np.random.default_rng(seed)
+    labels = rng.integers(0, n_classes, (height, width))
+    return (labels[None] == np.arange(n_classes)[:, None, None]).astype(np.float32)
+
+
+def test_class_selection_uniform_surface_gives_sr_one():
+    from deepssf.inference import class_selection
+
+    classes = _one_hot_classes(20, 30)
+    surf = np.full((20, 30), -np.log(600.0), dtype=np.float32)
+    df = class_selection(surf, classes, ["a", "b", "c", "d"])
+    assert list(df.columns) == [
+        "scenario",
+        "class",
+        "use",
+        "availability",
+        "selection_ratio",
+        "log_sr",
+    ]
+    assert len(df) == 4 and (df["scenario"] == 0).all()
+    np.testing.assert_allclose(df["selection_ratio"], 1.0, atol=1e-12)
+    np.testing.assert_allclose(df["log_sr"], 0.0, atol=1e-12)
+    np.testing.assert_allclose(df["availability"], classes.mean(axis=(1, 2)))
+    # An unnormalised constant surface gives the same answer
+    df2 = class_selection(surf + 5.0, classes)
+    np.testing.assert_allclose(df2["selection_ratio"], 1.0, atol=1e-12)
+
+
+def test_class_selection_all_mass_in_one_class_and_mask():
+    from deepssf.inference import class_selection
+
+    classes = _one_hot_classes(20, 30, seed=1)
+    in_b = classes[1] == 1
+    surf = np.where(in_b, 0.0, -np.inf).astype(np.float32)
+    surf[0, :] = np.nan  # invalid row
+    mask = np.ones((20, 30), dtype=bool)
+    mask[:, :5] = False
+    df = class_selection(
+        np.stack([surf, surf]),
+        classes,
+        list("abcd"),
+        mask=mask,
+        scenario_ids=["s1", "s2"],
+    )
+    assert list(df["scenario"].unique()) == ["s1", "s2"]
+    valid = mask.copy()
+    valid[0, :] = False
+    avail = classes[:, valid].mean(axis=1)
+    for _, sub in df.groupby("scenario"):
+        np.testing.assert_allclose(sub["use"], [0, 1, 0, 0], atol=1e-12)
+        np.testing.assert_allclose(sub["availability"], avail)
+        np.testing.assert_allclose(sub["selection_ratio"].iloc[1], 1 / avail[1])
+        assert np.isneginf(sub["log_sr"].iloc[0])
+
+
+def test_class_selection_zero_availability_is_nan_and_torch_matches_numpy():
+    from deepssf.inference import class_selection
+
+    classes = _one_hot_classes(15, 15, n_classes=3, seed=2)
+    classes = np.concatenate([classes, np.zeros((1, 15, 15), np.float32)])  # empty
+    rng = np.random.default_rng(3)
+    surf = rng.normal(size=(2, 15, 15)).astype(np.float32)
+    df = class_selection(surf, classes)
+    empty = df[df["class"] == "class_3"]
+    assert (
+        empty[["use", "availability", "selection_ratio", "log_sr"]].isna().all().all()
+    )
+    # use sums to 1 over the classes when they cover every cell
+    np.testing.assert_allclose(df.groupby("scenario")["use"].sum(), 1.0)
+    dft = class_selection(torch.from_numpy(surf), torch.from_numpy(classes))
+    pd.testing.assert_frame_equal(df, dft)
+    with pytest.raises(ValueError, match="do not match"):
+        class_selection(surf, classes[:, :10])
+    with pytest.raises(ValueError, match="class names"):
+        class_selection(surf, classes, ["a"])
+
+
+def test_class_selection_on_toy_predictor(toy):
+    """Predictor surfaces + class_selection == brute force from the reference."""
+    from deepssf.inference import HabitatLandscapePredictor, class_selection
+    from deepssf.predict import predict_habitat_landscape
+
+    height, width = toy.landscape.shape[1:]
+    classes = _one_hot_classes(height, width, n_classes=3, seed=5)
+    mask = _toy_mask(toy)
+    pred = HabitatLandscapePredictor(
+        toy.model, toy.landscape, toy.shape.n_scalars, mask=mask
+    )
+    scen = _scenarios(toy, 3)
+    crop = classes[:, pred.row_slice, pred.col_slice]
+    df = class_selection(pred.predict(scen), crop)
+    for b, s in enumerate(scen):
+        ref = predict_habitat_landscape(toy.model, toy.landscape, s).astype(np.float64)
+        valid = ~np.isnan(ref) & mask
+        p = np.exp(ref[valid] - ref[valid].max())
+        p /= p.sum()
+        use = classes[:, valid] @ p
+        avail = classes[:, valid].mean(axis=1)
+        got = df[df["scenario"] == b]
+        np.testing.assert_allclose(got["use"], use, atol=1e-5)
+        np.testing.assert_allclose(got["log_sr"], np.log(use / avail), atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Partial dependence, ALE, binned averages, H
+# ---------------------------------------------------------------------------
+
+
+def _raw_encoder(names=("x1", "x2", "x3")):
+    from deepssf.inference import ScalarEncoder
+
+    return ScalarEncoder(
+        [{"type": "raw", "input": n, "column": n} for n in names], list(names)
+    )
+
+
+def _toy_metric(encoded):
+    """Known structure: additive (2 x1 + x2²), interaction (x1 x2), linear x3."""
+    x1, x2, x3 = encoded[:, 0], encoded[:, 1], encoded[:, 2]
+    return pd.DataFrame(
+        {"add": 2 * x1 + x2.astype(float) ** 2, "inter": x1 * x2, "lin3": x3}
+    )
+
+
+def _toy_rows(n=40, seed=0):
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame(
+        {
+            "x1": rng.uniform(0, 1, n),
+            "x2": rng.uniform(0, 1, n),
+            "x3": rng.uniform(0, 1, n),
+        },
+        index=pd.RangeIndex(100, 100 + n),
+    )
+
+
+def test_partial_dependence_recovers_known_structure():
+    from deepssf.inference import partial_dependence
+
+    enc = _raw_encoder()
+    rows = _toy_rows()
+    grid = np.linspace(0, 1, 5)
+    pd_df, ice_df = partial_dependence(_toy_metric, rows, "x1", grid, enc, batch_size=7)
+    assert set(pd_df.columns) >= {"x1", "metric", "pd", "sd", "n", "frac_out_of_range"}
+    add = pd_df[pd_df["metric"] == "add"]
+    np.testing.assert_allclose(
+        add["pd"], 2 * grid + (rows["x2"] ** 2).mean(), rtol=1e-6
+    )
+    # ICE of each row is its own curve: 2 v + x2_i²
+    ice = ice_df[(ice_df["metric"] == "add") & (ice_df["ice_id"] == 103)]
+    np.testing.assert_allclose(
+        ice["ice"], 2 * grid + rows.loc[103, "x2"] ** 2, rtol=1e-6
+    )
+    assert len(ice_df) == len(grid) * len(rows) * 3
+    # A grid column named like an output column is refused, not overwritten
+    with pytest.raises(ValueError, match="clash"):
+        partial_dependence(_toy_metric, rows, "x1", grid, enc, grid_name="ice")
+    # No training ranges recorded -> nothing out of range
+    assert (pd_df["frac_out_of_range"] == 0).all()
+
+
+def test_partial_dependence_set_fn_coupling_and_2d_grid():
+    from deepssf.inference import partial_dependence
+
+    enc = _raw_encoder().ranges_from(_toy_rows())
+    rows = _toy_rows()
+
+    def couple(r, v):  # x3 follows x1, as dew point/wet bulb follow temperature
+        return r.assign(x1=v, x3=2 * v)
+
+    grid = np.array([0.0, 0.25, 0.5])
+    pd_df, _ = partial_dependence(_toy_metric, rows, couple, grid, enc, grid_name="x1")
+    np.testing.assert_allclose(pd_df.loc[pd_df["metric"] == "lin3", "pd"], 2 * grid)
+    # x3 = 2 * 0.5 = 1 lies above x3's training range for every row
+    oor = pd_df.loc[pd_df["metric"] == "lin3", "frac_out_of_range"].to_numpy()
+    assert oor[0] == 1.0 or oor[-1] == 1.0
+
+    grid2 = pd.DataFrame({"x1": [0.0, 1.0, 0.0, 1.0], "x2": [0.0, 0.0, 1.0, 1.0]})
+    pd2, _ = partial_dependence(
+        _toy_metric, rows, lambda r, v: r.assign(x1=v["x1"], x2=v["x2"]), grid2, enc
+    )
+    inter = pd2[pd2["metric"] == "inter"]
+    assert list(inter.columns[:2]) == ["x1", "x2"]
+    np.testing.assert_allclose(inter["pd"], [0, 0, 0, 1])
+
+
+def test_ale_recovers_known_structure():
+    from deepssf.inference import accumulated_local_effects
+
+    enc = _raw_encoder()
+    rows = _toy_rows(n=400, seed=1)
+    ale = accumulated_local_effects(_toy_metric, rows, "x2", None, enc, n_bins=8)
+    add = ale[ale["metric"] == "add"]
+    edges = add["x2"].to_numpy()
+    # x2 enters additively as x2², so ALE(z) - ALE(z0) = z² - z0² (up to the
+    # encoder's float32)
+    np.testing.assert_allclose(
+        add["ale"] - add["ale"].iloc[0], edges**2 - edges[0] ** 2, atol=1e-6
+    )
+    # Centred: count-weighted mean of bin midpoints is 0
+    a, n = add["ale"].to_numpy(), add["n"].to_numpy()[1:]
+    assert abs((n * (a[:-1] + a[1:]) / 2).sum() / n.sum()) < 1e-12
+    assert n.sum() == len(rows)
+    # x3 does not enter "add" at all
+    ale3 = accumulated_local_effects(_toy_metric, rows, "x3", None, enc)
+    np.testing.assert_allclose(ale3.loc[ale3["metric"] == "add", "ale"], 0, atol=1e-12)
+    # A derived variable via values + set_fn
+    ale_v = accumulated_local_effects(
+        _toy_metric,
+        rows,
+        "half_x1",
+        lambda r, v: r.assign(x1=2 * np.asarray(v)),
+        enc,
+        values=rows["x1"] / 2,
+    )
+    lin = ale_v[ale_v["metric"] == "add"]
+    np.testing.assert_allclose(
+        np.diff(lin["ale"]), 4 * np.diff(lin["half_x1"]), atol=1e-6
+    )
+
+
+def test_h_statistic_zero_for_additive_positive_for_interaction():
+    from deepssf.inference import h_statistic
+
+    enc = _raw_encoder()
+    rows = _toy_rows(n=15, seed=2)
+    h = h_statistic(_toy_metric, rows, enc, "x1", "x2").set_index("metric")
+    assert h.loc["add", "h"] < 1e-6
+    assert h.loc["inter", "h"] > 0.2
+
+
+def test_binned_average_mirrors_bin_weather():
+    from deepssf.inference import binned_average
+
+    enc = _raw_encoder()
+    rng = np.random.default_rng(3)
+    n = 2000
+    rows = pd.DataFrame(
+        {
+            "x1": np.where(
+                rng.random(n) < 0.5, 0.0, rng.exponential(1.0, n)
+            ),  # 50% zeros
+            "x2": rng.integers(0, 4, n).astype(float),  # 4 values: categorical
+            "x3": rng.uniform(0, 1, n),
+        }
+    )
+    out = binned_average(_toy_metric, rows, "x1", enc, n_bins=5)
+    lin3 = out[out["metric"] == "lin3"]
+    assert lin3["bin"].iloc[0] == "0" and lin3["n"].iloc[0] == (rows["x1"] == 0).sum()
+    assert lin3["bin"].iloc[1].startswith("[") and lin3["bin"].iloc[2].startswith("(")
+    assert lin3["n"].sum() == n and len(lin3) == 6
+    # Bin means equal a direct groupby on the metric
+    zero = rows["x1"] == 0
+    np.testing.assert_allclose(lin3["mean"].iloc[0], rows.loc[zero, "x3"].mean())
+
+    cat = binned_average(_toy_metric, rows, "x2", enc)
+    assert sorted(cat["bin"].unique()) == ["0", "1", "2", "3"]
+    # min_n drops thin bins; precomputed metrics give the same answer
+    thin = binned_average(_toy_metric, rows, "x3", enc, n_bins=10, min_n=n)
+    assert thin.empty
+    assert "mean" in thin.columns  # empty, but still has its columns
+    pre = binned_average(None, rows, "x3", enc, metrics=_toy_metric(rows.to_numpy()))
+    np.testing.assert_allclose(
+        pre["mean"], binned_average(_toy_metric, rows, "x3", enc)["mean"]
+    )
+
+
+def test_partial_dependence_on_toy_model_matches_brute_force(toy):
+    """PDP of log SR from the predictor equals a brute-force loop."""
+    from deepssf.inference import (
+        HabitatLandscapePredictor,
+        ScalarEncoder,
+        class_selection,
+        partial_dependence,
+    )
+    from deepssf.predict import predict_habitat_landscape
+
+    enc = ScalarEncoder(*toy_spec(toy.shape.n_scalars))
+    base = toy_natural(toy.shape.n_scalars, n=3)
+    height, width = toy.landscape.shape[1:]
+    classes = _one_hot_classes(height, width, n_classes=3, seed=6)
+    pred = HabitatLandscapePredictor(toy.model, toy.landscape, toy.shape.n_scalars)
+
+    def metric(encoded):
+        df = class_selection(pred.predict(encoded), classes)
+        return df.pivot(index="scenario", columns="class", values="log_sr")
+
+    grid = [3.0, 15.0]
+    pd_df, ice_df = partial_dependence(metric, base, "hour", grid, enc, batch_size=2)
+    for hour in grid:
+        rows = base.assign(hour=hour)
+        brute = []
+        for s in enc.encode(rows):
+            surf = predict_habitat_landscape(toy.model, toy.landscape, s)
+            brute.append(class_selection(surf, classes)["log_sr"].to_numpy())
+        got = pd_df[pd_df["hour"] == hour].set_index("metric")["pd"]
+        np.testing.assert_allclose(got.to_numpy(), np.mean(brute, axis=0), atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# step_nll and permutation importance
+# ---------------------------------------------------------------------------
+
+
+def _toy_steps(toy: ToyCase, n=24, seed=0):
+    """(spatial, scalars, bearing, targets) tensors matching the toy model."""
+    s = toy.shape
+    g = torch.Generator().manual_seed(seed)
+    spatial = torch.rand(n, s.n_raster, s.window, s.window, generator=g)
+    scalars = torch.randn(n, s.n_scalars, generator=g)
+    bearing = (torch.rand(n, 1, generator=g) - 0.5) * 2 * np.pi
+    targets = torch.randint(0, s.window, (n, 2), generator=g)
+    return spatial, scalars, bearing, targets
+
+
+def test_step_nll_matches_training_loss(toy):
+    from deepssf.inference import step_nll
+    from deepssf.train import negativeLogLikeLoss
+
+    spatial, scalars, bearing, targets = _toy_steps(toy)
+    nll = step_nll(toy.model, spatial, scalars, bearing, targets)
+    with torch.no_grad():
+        out = toy.model((spatial, scalars, bearing))
+    total, hab, mov = negativeLogLikeLoss(reduction="none")(
+        out, (targets[:, 0], targets[:, 1])
+    )
+    torch.testing.assert_close(nll["joint"], total)
+    torch.testing.assert_close(nll["habitat"], hab)
+    torch.testing.assert_close(nll["movement"], mov)
+    # (px, py) tuple targets give the same answer
+    nll2 = step_nll(
+        toy.model, spatial, scalars, bearing, (targets[:, 0], targets[:, 1])
+    )
+    torch.testing.assert_close(nll2["joint"], nll["joint"])
+
+
+def test_apply_permutation_keeps_groups_paired():
+    from deepssf.inference import _apply_permutation
+
+    n = 10
+    ids = torch.arange(n, dtype=torch.float32)
+    scalars = torch.stack([ids, ids * 10, -ids], dim=1)  # cols 0 and 1 pair up
+    spatial = ids.reshape(n, 1, 1, 1).expand(n, 3, 2, 2).clone()
+    spatial[:, 2] *= -1
+    idx = torch.arange(n)
+    source = torch.from_numpy(np.random.default_rng(0).permutation(n))
+    sp, sc = _apply_permutation(spatial, scalars, idx, source, [0, 1], [0, 1])
+    torch.testing.assert_close(sc[:, 1], sc[:, 0] * 10)  # still a pair
+    torch.testing.assert_close(sc[:, 0], ids[source])  # from the source step
+    torch.testing.assert_close(sc[:, 2], -ids)  # other columns untouched
+    torch.testing.assert_close(sp[:, 0], sp[:, 1])  # raster channels moved together
+    torch.testing.assert_close(sp[:, 0, 0, 0], ids[source])
+    torch.testing.assert_close(sp[:, 2, 0, 0], -ids)
+    assert torch.equal(scalars[:, 0], ids)  # inputs not modified in place
+
+
+def test_permutation_importance_ignored_channel_is_zero(toy):
+    import copy
+
+    from deepssf.inference import permutation_importance
+
+    s = toy.shape
+    model = copy.deepcopy(toy.model)
+    with torch.no_grad():
+        # Zero the first raster channel and the last scalar in both heads
+        for conv in (model.conv_habitat.conv2d[0], model.conv_movement.conv2d[0]):
+            conv.weight[:, 0] = 0.0
+            conv.weight[:, -1] = 0.0
+    raster_names = [f"r{i}" for i in range(s.n_raster)]
+    scalar_cols = [f"s{i}" for i in range(s.n_scalars)]
+    groups = {
+        "ignored_raster": ["r0"],
+        "ignored_scalar": [scalar_cols[-1]],
+        "used_scalars": scalar_cols[:2],
+    }
+    data = _toy_steps(toy, n=40)
+    res = permutation_importance(
+        model,
+        data,
+        groups,
+        scalar_cols,
+        raster_names,
+        n_repeats=3,
+        batch_size=16,
+        seed=1,
+        device="cpu",
+    )
+    assert set(res["head"]) == {"habitat", "movement", "joint"}
+    ignored = res[res["group"].str.startswith("ignored")]
+    np.testing.assert_allclose(ignored["increase"], 0.0, atol=1e-9)
+    used = res[(res["group"] == "used_scalars") & (res["head"] == "joint")]
+    assert abs(used["increase"].iloc[0]) > 1e-6
+    # Deterministic under a seed; a different seed gives different permutations
+    again = permutation_importance(
+        model,
+        data,
+        groups,
+        scalar_cols,
+        raster_names,
+        n_repeats=3,
+        batch_size=16,
+        seed=1,
+        device="cpu",
+    )
+    pd.testing.assert_frame_equal(again, res)  # same seed, same batches: identical
+    other = permutation_importance(
+        model,
+        data,
+        {"used_scalars": scalar_cols[:2]},
+        scalar_cols,
+        raster_names,
+        n_repeats=3,
+        seed=2,
+        device="cpu",
+    )
+    assert not np.allclose(
+        other["permuted_nll"],
+        used_val := res.loc[res["group"] == "used_scalars", "permuted_nll"].to_numpy(),
+    )
+    assert used_val.shape == (3,)
+    with pytest.raises(ValueError, match="unknown"):
+        permutation_importance(
+            model, data, {"bad": ["nope"]}, scalar_cols, raster_names
+        )
+
+
+def test_permutation_importance_on_movement_dataset(tmp_path):
+    """MovementDataset input: baseline equals the mean step_nll of its items."""
+    from rasterio.transform import from_origin
+
+    from deepssf.data import MovementDataset
+    from deepssf.inference import permutation_importance, step_nll
+
+    shape = TOY_SHAPES[0]
+    model = build_toy_model(shape)
+    transform = from_origin(0.0, 2000.0, 25.0, 25.0)
+    rng = np.random.default_rng(0)
+    path = tmp_path / "r.tif"
+    _write_tif(path, rng.random((1, 60, 60)), transform)
+    n = 12
+    x1 = rng.uniform(400, 1100, n)
+    y1 = rng.uniform(900, 1600, n)
+    df = pd.DataFrame(
+        {
+            "x1_": x1,
+            "y1_": y1,
+            "x2_": x1 + rng.uniform(-100, 100, n),
+            "y2_": y1 + rng.uniform(-100, 100, n),
+            "t1_": pd.Timestamp("2024-01-01"),
+            "bearing_tm1": rng.uniform(-3, 3, n),
+            "a": rng.normal(size=n),
+            "b": rng.normal(size=n),
+            "c": rng.normal(size=n),
+        }
+    )
+    ds = MovementDataset(
+        df, {"r": str(path)}, window_size=shape.window, scalar_cols=["a", "b", "c"]
+    )
+    res = permutation_importance(
+        model,
+        ds,
+        {"time": ["a", "b"]},
+        ["a", "b", "c"],
+        ["r"],
+        n_repeats=2,
+        batch_size=5,
+        device="cpu",
+    )
+    items = [ds[i] for i in range(n)]
+    nll = step_nll(
+        model,
+        torch.stack([it[0] for it in items]),
+        torch.stack([it[1] for it in items]),
+        torch.stack([it[2] for it in items]),
+        torch.tensor([[it[3][0], it[3][1]] for it in items]),
+    )
+    base = res.set_index("head")["baseline_nll"]
+    for head in ("habitat", "movement", "joint"):
+        assert base[head] == pytest.approx(float(nll[head].double().mean()), rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Movement kernel
+# ---------------------------------------------------------------------------
+
+
+def test_movement_parameters_reproduce_forward(toy):
+    from deepssf.inference import movement_parameters
+
+    spatial, scalars, bearing, _ = _toy_steps(toy, n=6)
+    m = toy.model
+    dec = movement_parameters(m, spatial, scalars)
+    assert dec["raw"].shape == (6, 12)
+    for key in (
+        "gamma_shape",
+        "gamma_scale",
+        "gamma_weight",
+        "vm_mu_offset",
+        "vm_kappa",
+        "vm_weight",
+    ):
+        assert dec[key].shape == (6, 2), key
+    torch.testing.assert_close(dec["gamma_weight"].sum(1), torch.ones(6))
+    with torch.no_grad():
+        forward_move = m((spatial, scalars, bearing))[..., 1]
+        rebuilt = m.movement_grid_output(dec["raw"], bearing)
+    torch.testing.assert_close(rebuilt, forward_move)
+
+    # The decoded values rebuild the same grid through the block's own densities,
+    # so shapes, scales (incl. the x500 factor), weights and offsets are right
+    block = m.movement_grid_output
+    dist, brg = block.distance_layer, block.bearing_layer
+    gam = torch.logsumexp(
+        torch.stack(
+            [
+                torch.log(dec["gamma_weight"][:, j, None, None])
+                + block._gamma_log(
+                    dist,
+                    dec["gamma_shape"][:, j, None, None],
+                    dec["gamma_scale"][:, j, None, None],
+                )
+                for j in range(2)
+            ]
+        ),
+        dim=0,
+    )
+    vm = torch.logsumexp(
+        torch.stack(
+            [
+                torch.log(dec["vm_weight"][:, j, None, None])
+                + block._vonmises_log(
+                    brg,
+                    dec["vm_kappa"][:, j, None, None],
+                    (dec["vm_mu_offset"][:, j] + bearing[:, 0])[:, None, None],
+                )
+                for j in range(2)
+            ]
+        ),
+        dim=0,
+    )
+    grid = gam + vm
+    grid = grid - torch.logsumexp(grid, dim=(1, 2), keepdim=True)
+    torch.testing.assert_close(grid, forward_move, atol=1e-4, rtol=1e-4)
+
+
+def test_movement_parameters_rejects_unknown_layout():
+    from deepssf.inference import movement_parameters
+    from deepssf.model import ConvJointModel, ModelParams
+
+    shape = TOY_SHAPES[0]
+    params = build_toy_model(shape).params
+    model = ConvJointModel(ModelParams({**params.__dict__, "num_movement_params": 13}))
+    spatial = torch.rand(2, shape.n_raster, shape.window, shape.window)
+    with pytest.raises(ValueError, match="layout has 12"):
+        movement_parameters(model, spatial, torch.zeros(2, shape.n_scalars))
+
+
+def _grid_block(window, pix=20.0, jacobian=True):
+    """A movement grid block for any window (ModelParams needs a full set)."""
+    from deepssf.model import (
+        ModelParams,
+        Params_to_Grid_Block,
+        Params_to_Grid_Block_ChV,
+    )
+
+    cls = Params_to_Grid_Block_ChV if jacobian else Params_to_Grid_Block
+    base = build_toy_model(TOY_SHAPES[0]).params.__dict__
+    return cls(ModelParams({**base, "image_dim": window, "pixel_size": pix}))
+
+
+def _grids(window, pix=20.0):
+    block = _grid_block(window, pix)
+    return block.distance_layer, block.bearing_layer
+
+
+@pytest.mark.parametrize("window", [21, 33])
+def test_kernel_summary_on_synthetic_kernels(window):
+    from deepssf.inference import kernel_summary
+
+    pix = 20.0
+    dist, brg = _grids(window, pix)
+    c = window // 2
+    neg = torch.full((window, window), -torch.inf)
+
+    centre = neg.clone()
+    centre[c, c] = 0.0
+    east3 = neg.clone()
+    east3[c, c + 3] = 0.0  # 3 cells east
+    uniform = torch.zeros(window, window)
+    df = kernel_summary(
+        torch.stack([centre, east3, uniform]),
+        dist,
+        brg,
+        bearing_tm1=[0.0, np.pi / 2, 0.0],
+    )
+    a, b, u = df.iloc[0], df.iloc[1], df.iloc[2]
+    assert a["p_stay"] == pytest.approx(1.0)
+    assert a["expected_distance"] == pytest.approx(0.3826 * pix, rel=1e-5)
+    assert a["outer_ring_mass"] == 0
+    assert b["expected_distance"] == pytest.approx(3 * pix)
+    assert b["sd_distance"] == pytest.approx(0, abs=1e-6)
+    assert b["q0.5"] == pytest.approx(3 * pix) and b["p_stay"] == 0
+    assert b["turn_resultant"] == pytest.approx(1.0)
+    assert b["turn_mean_angle"] == pytest.approx(-np.pi / 2)  # east after heading north
+    assert u["expected_distance"] == pytest.approx(
+        float(dist.double().mean()), rel=1e-9
+    )
+    assert u["outer_ring_mass"] == pytest.approx((4 * window - 4) / window**2)
+    assert u["turn_resultant"] < 1e-6  # float32 grids
+    assert u["p_stay"] == pytest.approx(1 / window**2)
+
+    classes = torch.zeros(2, window, window)
+    classes[0, :, : c + 1] = 1  # west half incl. centre column
+    classes[1, :, c + 1 :] = 1
+    dfc = kernel_summary(
+        east3, dist, brg, class_windows=classes, class_names=["w", "e"]
+    )
+    assert dfc["p_w"].iloc[0] == 0 and dfc["p_e"].iloc[0] == pytest.approx(1.0)
+
+
+def test_mixture_moments_known_values():
+    from deepssf.inference import mixture_moments
+
+    big = 30.0
+    dec = {
+        "gamma_shape": torch.tensor([[2.0, 1.0]]),
+        "gamma_scale": torch.tensor([[50.0, 400.0]]),
+        "gamma_weight": torch.softmax(torch.tensor([[big, -big]]), dim=1),
+        "vm_mu_offset": torch.tensor([[0.3, 0.0]]),
+        "vm_kappa": torch.tensor([[2.0, 0.1]]),
+        "vm_weight": torch.softmax(torch.tensor([[big, -big]]), dim=1),
+    }
+    mm = mixture_moments(dec).iloc[0]
+    assert mm["gamma_mean"] == pytest.approx(100.0)
+    assert mm["gamma_sd"] == pytest.approx(np.sqrt(2) * 50.0)
+    assert mm["gamma2_mean"] == pytest.approx(400.0)
+    i0, i1 = torch.special.i0(torch.tensor(2.0)), torch.special.i1(torch.tensor(2.0))
+    assert mm["vm_resultant"] == pytest.approx(float(i1 / i0), rel=1e-6)
+    assert mm["vm_mean_turn"] == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize("jacobian", [True, False], ids=["ChV", "no_jacobian"])
+def test_kernel_summary_matches_mixture_for_short_steps(jacobian):
+    """For a kernel well inside the window, grid and analytic means agree."""
+    from deepssf.inference import kernel_summary, mixture_moments
+
+    window, pix = 101, 20.0
+    block = _grid_block(window, pix, jacobian)
+    raw = torch.zeros(1, 12)
+    raw[0, 0] = np.log(4.0)  # shape 4
+    raw[0, 1] = np.log(30.0)  # scale 30 m -> mean 120 m, far inside 1 km
+    raw[0, 2], raw[0, 5] = 20.0, -20.0  # all weight on component 1
+    raw[0, 7] = np.log(1.5)
+    raw[0, 8], raw[0, 11] = 20.0, -20.0
+    grid = block(raw, torch.zeros(1, 1))
+    dec = {
+        "gamma_shape": torch.tensor([[4.0, 1.0]]),
+        "gamma_scale": torch.tensor([[30.0, 500.0]]),
+        "gamma_weight": torch.softmax(torch.tensor([[20.0, -20.0]]), dim=1),
+        "vm_mu_offset": torch.zeros(1, 2),
+        "vm_kappa": torch.tensor([[1.5, 1.0]]),
+        "vm_weight": torch.softmax(torch.tensor([[20.0, -20.0]]), dim=1),
+        "polar_jacobian": jacobian,
+    }
+    ks = kernel_summary(grid, block.distance_layer, block.bearing_layer).iloc[0]
+    mm = mixture_moments(dec).iloc[0]
+    assert ks["expected_distance"] == pytest.approx(mm["gamma_mean"], rel=0.03)
+    assert ks["turn_resultant"] == pytest.approx(mm["vm_resultant"], rel=0.05)
+
+
+@pytest.mark.skipif(not _accelerators(), reason="no CUDA or MPS device")
+@pytest.mark.parametrize("device", _accelerators() or ["none"])
+def test_step_and_kernel_functions_on_accelerator(toy, device):
+    """No float64 on MPS: these must move results to the CPU before widening."""
+    import copy
+
+    from deepssf.inference import (
+        class_selection,
+        kernel_summary,
+        mixture_moments,
+        movement_parameters,
+        permutation_importance,
+        step_nll,
+    )
+
+    model = copy.deepcopy(toy.model).to(device)
+    spatial, scalars, bearing, targets = (t.to(device) for t in _toy_steps(toy, n=12))
+    cpu_nll = step_nll(
+        toy.model, *(t.cpu() for t in (spatial, scalars, bearing, targets))
+    )
+    dev_nll = step_nll(model, spatial, scalars, bearing, targets)
+    torch.testing.assert_close(
+        dev_nll["joint"].cpu(), cpu_nll["joint"], atol=1e-4, rtol=1e-4
+    )
+
+    s = toy.shape
+    names = [f"s{i}" for i in range(s.n_scalars)]
+    res = permutation_importance(
+        model,
+        (spatial, scalars, bearing, targets),
+        {"g": names[:1]},
+        names,
+        [f"r{i}" for i in range(s.n_raster)],
+        n_repeats=2,
+        device=device,
+    )
+    assert np.isfinite(res["increase"]).all()
+
+    dec = movement_parameters(model, spatial, scalars)
+    mm = mixture_moments(dec)
+    mm_cpu = mixture_moments(
+        movement_parameters(toy.model, spatial.cpu(), scalars.cpu())
+    )
+    np.testing.assert_allclose(mm["gamma_mean"], mm_cpu["gamma_mean"], rtol=1e-4)
+    block = model.movement_grid_output
+    with torch.no_grad():
+        move = model((spatial, scalars, bearing))[..., 1]
+    ks = kernel_summary(move, block.distance_layer, block.bearing_layer, bearing[:, 0])
+    assert np.isfinite(ks.to_numpy()).all()
+    df = class_selection(move, torch.ones(2, s.window, s.window, device=device) / 2)
+    assert np.isfinite(df["use"]).all()
+
+
+# ---------------------------------------------------------------------------
+# Window edge masking (habitat CNN zero-padding artefacts)
+# ---------------------------------------------------------------------------
+
+
+def test_mask_window_edges():
+    from deepssf.inference import mask_window_edges
+
+    g = torch.Generator().manual_seed(0)
+    s = torch.randn(3, 15, 15, generator=g)
+    m = mask_window_edges(s, 2)
+    assert m.shape == s.shape
+    border = torch.ones(15, 15, dtype=torch.bool)
+    border[2:-2, 2:-2] = False
+    assert torch.isneginf(m[:, border]).all()
+    torch.testing.assert_close(torch.logsumexp(m, dim=(1, 2)), torch.zeros(3))
+    # Interior keeps its relative values
+    d = m[:, 2:-2, 2:-2] - s[:, 2:-2, 2:-2]
+    torch.testing.assert_close(d - d[:, :1, :1], torch.zeros_like(d))
+    torch.testing.assert_close(mask_window_edges(s, 0, renormalise=False), s)
+    with pytest.raises(ValueError, match="leaves nothing"):
+        mask_window_edges(s, 8)
+
+
+def test_next_step_surfaces_excludes_edge_buffer(toy):
+    from deepssf.inference import next_step_surfaces
+    from deepssf.predict import habitat_edge_buffer
+
+    spatial, scalars, bearing, _ = _toy_steps(toy, n=5)
+    surf = next_step_surfaces(toy.model, spatial, scalars, bearing)
+    b = habitat_edge_buffer(toy.model)
+    assert b == toy.shape.n_conv_layers_hab
+    with torch.no_grad():
+        out = toy.model((spatial, scalars, bearing))
+    torch.testing.assert_close(surf["movement"], out[..., 1])
+    inner = (slice(None), slice(b, -b), slice(b, -b))
+    for name, raw in (("habitat", out[..., 0]), ("joint", out[..., 0] + out[..., 1])):
+        s = surf[name]
+        assert torch.isneginf(s[:, :b]).all() and torch.isneginf(s[:, :, -b:]).all()
+        expected = raw[inner] - torch.logsumexp(raw[inner], dim=(1, 2), keepdim=True)
+        torch.testing.assert_close(s[inner], expected, atol=1e-5, rtol=1e-5)
+    full = next_step_surfaces(toy.model, spatial, scalars, bearing, edge_buffer=0)
+    assert torch.isfinite(full["joint"]).all()
+
+
+def test_kernel_summary_ring_follows_masked_interior():
+    from deepssf.inference import kernel_summary, mask_window_edges
+
+    window, w = 21, 3
+    dist, brg = _grids(window)
+    k = mask_window_edges(torch.zeros(1, window, window), w)
+    ks = kernel_summary(k, dist, brg, edge=w).iloc[0]
+    side = window - 2 * w
+    assert ks["outer_ring_mass"] == pytest.approx((4 * side - 4) / side**2)
+
+
+@pytest.mark.skipif(not _accelerators(), reason="no CUDA or MPS device")
+@pytest.mark.parametrize("device", _accelerators() or ["none"])
+def test_next_step_surfaces_on_accelerator(toy, device):
+    import copy
+
+    from deepssf.inference import next_step_surfaces
+
+    model = copy.deepcopy(toy.model).to(device)
+    data = _toy_steps(toy, n=4)
+    cpu = next_step_surfaces(toy.model, *data[:3])
+    dev = next_step_surfaces(model, *(t.to(device) for t in data[:3]))
+    for name in ("habitat", "movement", "joint"):
+        a, b = dev[name].cpu(), cpu[name]
+        assert torch.equal(torch.isfinite(a), torch.isfinite(b))
+        fin = torch.isfinite(b)
+        torch.testing.assert_close(a[fin], b[fin], atol=1e-4, rtol=1e-4)
