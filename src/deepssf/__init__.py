@@ -18,6 +18,7 @@ from deepssf.data import (
     prepare_movement_df,
     save_raster,
 )
+from deepssf.inference import HabitatLandscapePredictor, ScalarEncoder, crop_windows
 from deepssf.model import ConvJointModel, ModelParams, flattened_conv_dim
 from deepssf.plot import add_heatmap_overlay, plot_trajectories_folium
 from deepssf.predict import habitat_edge_buffer, predict_habitat_landscape
@@ -99,6 +100,10 @@ __all__ = [
     "habitat_edge_buffer",
     # validate
     "validate_next_step_probs",
+    # inference
+    "ScalarEncoder",
+    "crop_windows",
+    "HabitatLandscapePredictor",
     # utils
     "get_device",
     "get_output_dir",

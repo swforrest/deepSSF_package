@@ -5,11 +5,25 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
-- **`deepssf.inference` module (scaffold)** — will hold tools for interrogating
-  a fitted model (partial dependence, feature importance, movement-kernel
-  parameters). Nothing is exported yet; the module docstring records the
-  properties of `ConvJointModel` the functions will rely on. Its tests
-  (`tests/test_inference.py`) run against toy models of several shapes.
+- **`deepssf.inference` module** — tools for interrogating a fitted model.
+  The module docstring records the properties of `ConvJointModel` they rely
+  on. Nothing in it assumes particular covariates, window size or depth; the
+  tests (`tests/test_inference.py`) run against toy models of three shapes.
+  - **`ScalarEncoder`** converts scalar covariates between natural units and
+    model inputs, driven by a spec of `cyclic` (sin/cos with a period),
+    `linear` (optional `log1p`, then z-score), `circular_degrees` (sin/cos,
+    with an optional calm rule encoded as (0, 0)) and `raw` entries. It
+    checks the spec covers `scalar_cols` exactly, records training ranges
+    (`ranges_from`, `check_ranges`), builds the linear entries from a scaling
+    table (`from_scaling_table`), and saves/loads JSON.
+  - **`crop_windows`** crops [N, C, ws, ws] windows around many locations at
+    once, exactly as `MovementDataset` does (floor of the pixel, -1 padding).
+  - **`HabitatLandscapePredictor`** gives landscape habitat surfaces for many
+    scalar scenarios. The rasters pass through the first habitat conv once;
+    each scenario then only adds a constant per channel and runs the
+    remaining layers. Matches `predict_habitat_landscape` on every valid
+    cell, optionally restricted (and cropped) to a mask, and batches
+    scenarios within a memory budget.
 - **`scalar_cols` argument to `prepare_movement_df`** — pass the same list you
   give `make_dataloaders`. Names the function derives (`dt_hour`, the
   `hour_t1_*`/`yday_t1_*` encodings, …) are still computed; every other name
