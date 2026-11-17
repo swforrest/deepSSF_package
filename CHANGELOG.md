@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
+- **`deepssf.inference` module (scaffold)** — will hold tools for interrogating
+  a fitted model (partial dependence, feature importance, movement-kernel
+  parameters). Nothing is exported yet; the module docstring records the
+  properties of `ConvJointModel` the functions will rely on. Its tests
+  (`tests/test_inference.py`) run against toy models of several shapes.
 - **`scalar_cols` argument to `prepare_movement_df`** — pass the same list you
   give `make_dataloaders`. Names the function derives (`dt_hour`, the
   `hour_t1_*`/`yday_t1_*` encodings, …) are still computed; every other name
